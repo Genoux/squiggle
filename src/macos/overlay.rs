@@ -83,14 +83,15 @@ fn panel(mtm: MainThreadMarker, interactive: bool) -> Retained<NSPanel> {
     panel.setHasShadow(interactive);
     panel.setIgnoresMouseEvents(!interactive);
     // The card and pill sit one level above the underlines, so a line from
-    // a field behind never crosses the card.
+    // the text under the card never crosses it. Not `setFloatingPanel`: it
+    // resets the level to NSFloatingWindowLevel, which put every panel on
+    // one level and drew underlines over the card whenever they redrew last.
     panel.setLevel(NSStatusWindowLevel + interactive as isize);
     panel.setAnimationBehavior(NSWindowAnimationBehavior::None);
     // An accessory app is never active, and a panel that hides on
     // deactivation would therefore never show at all.
     panel.setHidesOnDeactivate(false);
     panel.setBecomesKeyOnlyIfNeeded(true);
-    panel.setFloatingPanel(true);
     unsafe { panel.setReleasedWhenClosed(false) };
     panel.setCollectionBehavior(
         NSWindowCollectionBehavior::CanJoinAllSpaces

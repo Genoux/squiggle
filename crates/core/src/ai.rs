@@ -8,7 +8,6 @@
 //! rewrote more than it corrected, so a paraphrase never reaches the screen.
 
 use crate::fix::Fix;
-use crate::lang::Language;
 use crate::router;
 use anyhow::Result;
 use serde::Deserialize;
@@ -98,12 +97,7 @@ pub fn check(key: &str, text: &str) -> Result<Vec<Fix>> {
     }
     let reply = router::structured(key, &system_prompt(text), text, &schema(), TIMEOUT)?;
     let reply: Reply = serde_json::from_value(reply)?;
-    let french = |at: usize| {
-        let (start, end) = crate::fix::sentence(text, at);
-        let sentence: String = text.chars().skip(start).take(end - start).collect();
-        crate::lang::detect(&sentence) == Language::French
-    };
-    Ok(crate::diff::fixes(text, &reply.corrected, french))
+    Ok(crate::diff::fixes(text, &reply.corrected))
 }
 
 #[cfg(test)]

@@ -36,8 +36,9 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
 - A paragraph is sent with its line break when it has one. Without it every
   paragraph looked unfinished and the model never added end punctuation;
   the prompt says which case it is.
-- Titles ("Capitalization", "Majuscule", ...) come from the kind of change,
-  in the language of the sentence it is in.
+- Titles are generic, as Grammarly's are ("Correct your spelling",
+  "Correct your punctuation"): the change explains itself, and titles naming
+  the rule ("Majuscule et ponctuation") read as a lecture.
 - Harper draws first and is the offline fallback; once the model has
   answered for the current text, its fixes are the whole answer. Harper on
   short French slang offered "Eat" for "ERT", and only runs on sentences
@@ -72,6 +73,9 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
   observers must be re-registered whenever focus moves.
 - Every AX call is IPC into another app; a 150ms messaging timeout keeps a
   hung app from hanging Gramly.
+- The card and pill are one window level above the underlines. Never call
+  `setFloatingPanel` on these panels: it resets the level, which put every
+  panel on one level and drew underlines over the card.
 - Panels are `NonactivatingPanel`, `hidesOnDeactivate = false`. Clicking
   Accept must not steal focus from the field being corrected, and an accessory
   app is never active, so a panel that hides on deactivation never shows.

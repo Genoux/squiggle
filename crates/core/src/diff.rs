@@ -124,49 +124,37 @@ fn joined(tokens: &[Token]) -> String {
     tokens.iter().map(|t| t.text.as_str()).collect()
 }
 
-/// What kind of change, and the card's title for it, in the language of
-/// the sentence it is in.
-fn classify(original: &str, replacement: &str, french: bool) -> (Kind, String) {
+/// What kind of change, and the card's title for it - generic, as
+/// Grammarly's are ("Correct your spelling"): the change itself is the
+/// explanation, and a title naming the rule read as a lecture.
+fn classify(original: &str, replacement: &str) -> (Kind, String) {
     let letters = |s: &str| -> String { s.chars().filter(|c| c.is_alphanumeric()).collect() };
     let same_letters = letters(original).to_lowercase() == letters(replacement).to_lowercase();
     let case = letters(original) != letters(replacement);
-    let marks = |s: &str| -> String {
-        s.chars()
-            .filter(|c| !c.is_alphanumeric() && !c.is_whitespace())
-            .collect()
-    };
-    let punctuation = marks(original) != marks(replacement);
-    let (en, fr, kind) = if same_letters && case && punctuation {
-        (
-            "Capitalization and punctuation",
-            "Majuscule et ponctuation",
-            Kind::Correctness,
-        )
-    } else if same_letters && case {
-        ("Capitalization", "Majuscule", Kind::Correctness)
+    let (title, kind) = if same_letters && case {
+        ("Correct the capitalization", Kind::Correctness)
     } else if same_letters {
-        ("Punctuation", "Ponctuation", Kind::Correctness)
+        ("Correct your punctuation", Kind::Correctness)
     } else if !original.is_empty()
         && original.chars().all(wordish)
         && replacement.chars().all(wordish)
         && !replacement.is_empty()
     {
-        ("Spelling", "Orthographe", Kind::Spelling)
+        ("Correct your spelling", Kind::Spelling)
     } else {
-        ("Grammar", "Grammaire", Kind::Correctness)
+        ("Correct your grammar", Kind::Correctness)
     };
-    (kind, if french { fr } else { en }.into())
+    (kind, title.into())
 }
 
 /// Fixes that turn `original` into `corrected`, or none if the correction
-/// rewrote rather than corrected. `french` says, per char offset, whether
-/// the sentence there is French, for the card's title.
+/// rewrote rather than corrected.
 ///
 /// Diffed line by line: a fix never crosses or removes a line break. Diffing
 /// the whole text let "think\n" → "think?" come back as a fix replacing the
 /// line break with "?", which accepted would have joined two lines. If the
 /// model changed the number of lines, nothing is trusted.
-pub fn fixes(original: &str, corrected: &str, french: impl Fn(usize) -> bool) -> Vec<Fix> {
+pub fn fixes(original: &str, corrected: &str) -> Vec<Fix> {
     let mut corrected = corrected.to_string();
     // The model often drops a final line break; that is not a correction.
     while original.ends_with('\n') && !corrected.ends_with('\n') {
@@ -180,21 +168,17 @@ pub fn fixes(original: &str, corrected: &str, french: impl Fn(usize) -> bool) ->
     let mut out = Vec::new();
     let mut offset = 0;
     for (a, b) in old.iter().zip(&new) {
-        out.extend(
-            line_fixes(a, b, &|at| french(offset + at))
-                .into_iter()
-                .map(|mut fix| {
-                    fix.start += offset;
-                    fix.end += offset;
-                    fix
-                }),
-        );
+        out.extend(line_fixes(a, b).into_iter().map(|mut fix| {
+            fix.start += offset;
+            fix.end += offset;
+            fix
+        }));
         offset += a.chars().count() + 1;
     }
     out
 }
 
-fn line_fixes(original: &str, corrected: &str, french: &dyn Fn(usize) -> bool) -> Vec<Fix> {
+fn line_fixes(original: &str, corrected: &str) -> Vec<Fix> {
     let a = tokens(original);
     let b = tokens(corrected);
     if a.len() > MOST_TOKENS || b.len() > MOST_TOKENS {
@@ -253,7 +237,7 @@ fn line_fixes(original: &str, corrected: &str, french: &dyn Fn(usize) -> bool) -
         if was == now || was.chars().count() > LONGEST_FIX {
             continue;
         }
-        let (kind, message) = classify(was.trim(), now.trim(), french(a[a_lo].start));
+        let (kind, message) = classify(was.trim(), now.trim());
         out.push(Fix {
             start: a[a_lo].start,
             end: a[a_hi - 1].end,
@@ -272,7 +256,7 @@ mod tests {
     use crate::fix::apply;
 
     fn round_trip(original: &str, corrected: &str) -> Vec<Fix> {
-        let found = fixes(original, corrected, |_| false);
+        let found = fixes(original, corrected);
         assert_eq!(apply(original, &found), corrected, "{found:#?}");
         found
     }
@@ -289,7 +273,7 @@ mod tests {
             .collect();
         assert_eq!(originals, ["i", "paris", "what", "think"]);
         assert_eq!(found[3].replacement, "think?");
-        assert_eq!(found[0].message, "Capitalization");
+        assert_eq!(found[0].message, "Correct the capitalization");
     }
 
     #[test]
@@ -302,45 +286,29 @@ mod tests {
 
     #[test]
     fn unchanged_text_has_no_fixes() {
-        assert!(fixes("All good here.", "All good here.", |_| false).is_empty());
+        assert!(fixes("All good here.", "All good here.").is_empty());
     }
 
     #[test]
     fn a_dropped_trailing_newline_is_not_a_fix() {
-        assert!(fixes("All good here.\n", "All good here.", |_| false).is_empty());
+        assert!(fixes("All good here.\n", "All good here.").is_empty());
     }
 
     #[test]
     fn a_rewrite_is_refused() {
         let text = "I think we should be able to solve this issue for you today.";
-        assert!(
-            fixes(
-                text,
-                "We can fix it for you right now, no problem at all.",
-                |_| false
-            )
-            .is_empty()
-        );
+        assert!(fixes(text, "We can fix it for you right now, no problem at all.").is_empty());
     }
 
     #[test]
     fn a_line_break_is_never_part_of_a_fix() {
         let text = "what do you think\nsee you\n";
-        let found = fixes(text, "What do you think?\nSee you.", |_| false);
+        let found = fixes(text, "What do you think?\nSee you.");
         assert_eq!(apply(text, &found), "What do you think?\nSee you.\n");
         assert!(
             found.iter().all(|f| !f.original(text).contains('\n')),
             "{found:#?}"
         );
-    }
-
-    #[test]
-    fn titles_follow_each_sentences_language() {
-        let text = "salut ok\ni went home";
-        let french_until = text.find('\n').unwrap();
-        let found = fixes(text, "Salut ok\nI went home", |at| at < french_until);
-        assert_eq!(found[0].message, "Majuscule");
-        assert_eq!(found[1].message, "Capitalization");
     }
 
     #[test]
