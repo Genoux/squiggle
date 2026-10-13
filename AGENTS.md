@@ -39,7 +39,12 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
 - Titles are generic, as Grammarly's are ("Correct your spelling",
   "Correct your punctuation"): the change explains itself, and titles naming
   the rule ("Majuscule et ponctuation") read as a lecture.
-- Harper draws first and is the offline fallback; once the model has
+- With the model on, Harper is not drawn at all - only the model's fixes,
+  a second after the pause. Drawing Harper first made every suggestion the
+  model disagreed with appear and then vanish, often while hovered (the log
+  showed "card's fix withdrawn" each time). Harper draws when the model is
+  off, failing, or has not answered within `MODEL_LATE` (4s).
+- Harper and the model, when both are drawn: once the model has
   answered for the current text, its fixes are the whole answer. Harper on
   short French slang offered "Eat" for "ERT", and only runs on sentences
   detected as clearly English.
@@ -88,6 +93,8 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
   closed. Closing on every rebuild made a card vanish a second after it
   opened, when the model's answer arrived. Actions apply the fix the card
   shows (`showing`), not the index the button was drawn with.
+- Where each fix was drawn is kept until the text changes (`placed`), so a
+  word the app fails to place for one tick keeps its underline.
 - A card never closes from under the pointer. Two causes looked like
   "hiding for no reason": one unanswered accessibility question (Chromium
   misses the 150ms deadline when busy) was read as focus leaving, and the

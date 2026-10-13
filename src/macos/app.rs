@@ -46,6 +46,9 @@ const LEAVE: Duration = Duration::from_millis(320);
 /// Unanswered questions in a row before the field is given up: 8 ticks,
 /// 400ms. Fewer and a busy app closed the card mid-read.
 const GRACE: u32 = 8;
+/// Past this without an answer from the model, Harper's underlines are
+/// shown after all.
+const MODEL_LATE: Duration = Duration::from_secs(4);
 /// How long an accepted word glows green.
 const FLASH: Duration = Duration::from_millis(380);
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -81,6 +84,15 @@ struct State {
     woken: HashSet<i32>,
     /// Unanswered accessibility questions in a row; see `GRACE`.
     misses: u32,
+    /// AI suggestions are switched on and have a key.
+    ai_on: bool,
+    /// When the current text was sent to be checked.
+    submitted_at: Instant,
+    /// Where each fix was last drawn, kept while the text is unchanged so a
+    /// word the app fails to place for a tick keeps its underline.
+    placed: std::collections::HashMap<(usize, usize), CGRect>,
+    /// Harper has been shown for the current text because the model was late.
+    fell_back: bool,
     ai_error: Option<String>,
     /// The model has answered for the text as it is now. Until then Harper's
     /// underlines stand in; once it has, its answer is the whole answer.
@@ -312,6 +324,7 @@ impl Controller {
     fn on_tick(&self, state: &mut State) {
         let mtm = self.mtm();
         let config = Config::load().unwrap_or_default();
+        state.ai_on = config.ai && config.openrouter_key.is_some();
         let trusted = ax::trusted(false);
         if trusted != state.trusted {
             state.trusted = trusted;
@@ -365,6 +378,8 @@ impl Controller {
             state.ai = rebase(&state.text, &text, &state.ai);
             state.fixes = rebase(&state.text, &text, &state.fixes);
             state.text = text;
+            state.placed.clear();
+            state.fell_back = false;
             state.ai_current = false;
             state.changed_at = Instant::now();
             state.submitted = false;
@@ -376,6 +391,7 @@ impl Controller {
         }
         if !state.submitted && state.changed_at.elapsed() >= PAUSE {
             state.submitted = true;
+            state.submitted_at = Instant::now();
             state.worker.submit(state.generation, state.text.clone());
         }
 
@@ -400,6 +416,12 @@ impl Controller {
                 }
                 _ => {}
             }
+        }
+        // The model is late or failing: show what Harper found, once.
+        let late = state.submitted && state.submitted_at.elapsed() >= MODEL_LATE;
+        if !state.ai_current && !state.fell_back && (late || state.ai_error.is_some()) {
+            state.fell_back = true;
+            changed = true;
         }
         if changed {
             refilter(state);
@@ -437,10 +459,15 @@ impl Controller {
             } else {
                 (location, length)
             };
+            let key = (fix.start, fix.end);
             let Some(bounds) = state
                 .field
                 .as_ref()
                 .and_then(|f| f.bounds(location, length))
+                .inspect(|b| {
+                    state.placed.insert(key, *b);
+                })
+                .or_else(|| state.placed.get(&key).copied())
             else {
                 continue;
             };
@@ -561,6 +588,7 @@ fn grow(rect: CGRect, by: f64) -> CGRect {
 fn reset(state: &mut State) {
     state.field = None;
     state.text.clear();
+    state.placed.clear();
     state.local.clear();
     state.ai.clear();
     state.fixes.clear();
@@ -581,7 +609,17 @@ fn refilter(state: &mut State) {
     // instant first draw and the offline fallback, and on French slang it
     // offered "Eat" for "ERT" and "ma's" for "mais" - so once the model has
     // answered for this text, what it did not flag is not flagged.
-    let base = if state.ai_current {
+    //
+    // And with the model on, Harper is not drawn at all while waiting for it.
+    // Drawing Harper first and the model second meant every suggestion the
+    // model disagreed with appeared, then vanished - often while being
+    // hovered, leaving a card with no underline to come back to. Underlines
+    // that arrive a second later and stay beat underlines that arrive at
+    // once and change their mind. Harper still draws when the model is off,
+    // failing, or later than `MODEL_LATE`.
+    let model_coming =
+        state.ai_on && state.ai_error.is_none() && state.submitted_at.elapsed() < MODEL_LATE;
+    let base = if state.ai_current || model_coming {
         state.ai.clone()
     } else {
         merge(state.local.clone(), state.ai.clone())
@@ -1014,6 +1052,10 @@ pub fn run() -> anyhow::Result<()> {
         card_stale: None,
         woken: HashSet::new(),
         misses: 0,
+        ai_on: false,
+        submitted_at: Instant::now(),
+        placed: std::collections::HashMap::new(),
+        fell_back: false,
         ai_error: None,
         ai_current: false,
         trusted,
