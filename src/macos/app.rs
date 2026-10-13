@@ -43,6 +43,9 @@ const HOVER: Duration = Duration::from_millis(40);
 /// that makes the whole app feel broken, and one that lingers a beat costs
 /// nothing.
 const LEAVE: Duration = Duration::from_millis(320);
+/// Unanswered questions in a row before the field is given up: 8 ticks,
+/// 400ms. Fewer and a busy app closed the card mid-read.
+const GRACE: u32 = 8;
 /// How long an accepted word glows green.
 const FLASH: Duration = Duration::from_millis(380);
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -76,6 +79,8 @@ struct State {
     card_stale: Option<CGRect>,
     /// Apps already asked to expose their text (see `ax::wake`).
     woken: HashSet<i32>,
+    /// Unanswered accessibility questions in a row; see `GRACE`.
+    misses: u32,
     ai_error: Option<String>,
     /// The model has answered for the text as it is now. Until then Harper's
     /// underlines stand in; once it has, its answer is the whole answer.
@@ -111,9 +116,13 @@ define_class!(
         fn accept(&self, sender: &AnyObject) {
             let tagged = tag(sender);
             self.with_state(|state, _| {
-                let index = showing(state, tagged);
-                flash(state, &[index]);
-                accept_one(state, index);
+                let Some(fix) = shown_fix(state, tagged) else {
+                    return;
+                };
+                if let Some(word) = state.card_word {
+                    state.flashing = Some((vec![word], Instant::now()));
+                }
+                accept_fix(state, &fix);
             });
         }
 
@@ -121,8 +130,7 @@ define_class!(
         fn dismiss(&self, sender: &AnyObject) {
             let tagged = tag(sender);
             self.with_state(|state, _| {
-                let index = showing(state, tagged);
-                if let Some(fix) = state.fixes.get(index) {
+                if let Some(fix) = shown_fix(state, tagged) {
                     let original = fix.original(&state.text);
                     state.dismissed.insert((original, fix.replacement.clone()));
                 }
@@ -135,8 +143,7 @@ define_class!(
         fn learn(&self, sender: &AnyObject) {
             let tagged = tag(sender);
             self.with_state(|state, _| {
-                let index = showing(state, tagged);
-                if let Some(fix) = state.fixes.get(index) {
+                if let Some(fix) = shown_fix(state, tagged) {
                     let word = fix.original(&state.text);
                     if let Err(err) = config::add_to_dictionary(&word) {
                         eprintln!("gramly: adding {word:?} to the dictionary: {err:#}");
@@ -158,6 +165,13 @@ define_class!(
                 let index = showing(state, tagged);
                 let indices: Vec<usize> =
                     group(state, index).into_iter().map(|(i, _)| i).collect();
+                if indices.is_empty() {
+                    // The card outlived its fixes (see `ORPHAN`): take the one shown.
+                    if let Some(fix) = shown_fix(state, tagged) {
+                        accept_fix(state, &fix);
+                    }
+                    return;
+                }
                 flash(state, &indices);
                 accept_fixes(state, &indices);
             });
@@ -278,6 +292,23 @@ impl Controller {
         object
     }
 
+    /// Counts an unanswered question. Returns whether to wait it out (true)
+    /// rather than give up on the field; after `GRACE` misses in a row the
+    /// field is dropped and everything hidden.
+    fn missed(&self, state: &mut State, what: &str) -> bool {
+        state.misses += 1;
+        if state.misses < GRACE {
+            return true;
+        }
+        if state.field.is_some() {
+            trace(&format!(
+                "{what} unanswered for {GRACE} ticks; field dropped"
+            ));
+        }
+        reset(state);
+        false
+    }
+
     fn on_tick(&self, state: &mut State) {
         let mtm = self.mtm();
         let config = Config::load().unwrap_or_default();
@@ -299,12 +330,23 @@ impl Controller {
             ax::wake(pid);
         }
 
-        // Focus.
+        // Focus. A question to another app can go unanswered for a tick -
+        // Chromium misses its 150ms deadline while it is busy - and that is
+        // not focus leaving. Only a run of misses is.
         let field = ax::focused_field();
-        let same = matches!((&field, &state.field), (Some(a), Some(b)) if a == b);
-        if !same {
-            reset(state);
-            state.field = field;
+        match (&field, &state.field) {
+            (Some(now), Some(before)) if now == before => state.misses = 0,
+            (Some(_), _) => {
+                reset(state);
+                state.field = field;
+                state.misses = 0;
+            }
+            (None, Some(_)) => {
+                if self.missed(state, "focus") {
+                    return;
+                }
+            }
+            (None, None) => return,
         }
         let Some(field) = &state.field else {
             return;
@@ -312,7 +354,7 @@ impl Controller {
 
         // Text.
         let Some(text) = field.value() else {
-            state.overlay.hide_all();
+            self.missed(state, "text");
             return;
         };
         if text != state.text {
@@ -327,6 +369,9 @@ impl Controller {
             state.changed_at = Instant::now();
             state.submitted = false;
             state.generation += 1;
+            if state.overlay.card_for.is_some() {
+                trace("text changed; card closed");
+            }
             state.overlay.hide_card();
         }
         if !state.submitted && state.changed_at.elapsed() >= PAUSE {
@@ -360,16 +405,27 @@ impl Controller {
             refilter(state);
         }
         if state.fixes.is_empty() {
-            state.overlay.hide_all();
+            // Nothing left to underline - but a card still under the pointer
+            // stays until the pointer leaves it.
+            state.overlay.hide_marks();
+            state.overlay.hide_pill();
+            if state.overlay.card_for == Some(ORPHAN) {
+                let mouse = NSEvent::mouseLocation();
+                state.overlay.hover(mouse);
+                linger(state, mouse);
+            } else {
+                state.overlay.hide_card();
+            }
             return;
         }
 
         // Geometry, every tick: the field scrolls and its window moves without
         // the text changing.
         let Some(frame) = state.field.as_ref().and_then(|f| f.visible_frame()) else {
-            state.overlay.hide_all();
+            self.missed(state, "frame");
             return;
         };
+        state.misses = 0;
         let field_rect = overlay::to_cocoa(frame, mtm);
         state.words.clear();
         for (index, fix) in state.fixes.iter().enumerate() {
@@ -399,7 +455,9 @@ impl Controller {
         }
 
         // Hover.
-        if let (Some(word), Some(index)) = (state.card_stale.take(), state.overlay.card_for) {
+        if let (Some(word), Some(index)) = (state.card_stale.take(), state.overlay.card_for)
+            && index != ORPHAN
+        {
             state.overlay.hide_card();
             open_card(state, index, word, self);
         }
@@ -435,16 +493,7 @@ impl Controller {
                         open_card(state, index, word, self);
                     }
                 }
-                None => {
-                    state.hovering = None;
-                    if state.overlay.card_for.is_some() {
-                        let left = *state.left_at.get_or_insert_with(Instant::now);
-                        if left.elapsed() >= LEAVE {
-                            state.overlay.hide_card();
-                            state.left_at = None;
-                        }
-                    }
-                }
+                None => linger(state, mouse),
             }
         }
 
@@ -564,6 +613,10 @@ fn refilter(state: &mut State) {
             state.card_fix = Some(state.fixes[index].clone());
             state.card_stale = Some(word);
         }
+        None if state.overlay.card_frame().is_some() => {
+            eprintln!("gramly: card's fix withdrawn; card kept until the pointer leaves");
+            state.overlay.card_for = Some(ORPHAN);
+        }
         None => state.overlay.hide_card(),
     }
 }
@@ -573,6 +626,28 @@ fn refilter(state: &mut State) {
 /// rebuilt since.
 fn showing(state: &State, tagged: usize) -> usize {
     state.overlay.card_for.unwrap_or(tagged)
+}
+
+/// The fix the card shows, kept with the card itself so it can still be
+/// accepted after the list it came from was rebuilt.
+fn shown_fix(state: &State, tagged: usize) -> Option<Fix> {
+    state
+        .card_fix
+        .clone()
+        .or_else(|| state.fixes.get(tagged).cloned())
+}
+
+/// `card_for` for a card whose fix was withdrawn while the pointer was on it.
+/// It stays until the pointer leaves - a card that vanishes from under the
+/// pointer reads as a bug, whatever the reason - and indexes nothing.
+pub const ORPHAN: usize = usize::MAX;
+
+/// Why the card or the underlines went away, with `GRAMLY_TRACE` set. A card
+/// "hiding for no reason" is only fixable with the reason.
+fn trace(why: &str) {
+    if std::env::var_os("GRAMLY_TRACE").is_some() {
+        eprintln!("gramly: {why}");
+    }
 }
 
 fn open_card(state: &mut State, index: usize, word: CGRect, controller: &Controller) {
@@ -605,6 +680,25 @@ fn in_corridor(state: &State, mouse: CGPoint) -> bool {
     mouse.x >= left && mouse.x <= right && mouse.y >= low - 2.0 && mouse.y <= high + 2.0
 }
 
+/// The pointer is off every word: the card closes once it has been out of the
+/// corridor for `LEAVE`.
+fn linger(state: &mut State, mouse: CGPoint) {
+    state.hovering = None;
+    if state.overlay.card_for.is_none() {
+        return;
+    }
+    if in_corridor(state, mouse) {
+        state.left_at = None;
+        return;
+    }
+    let left = *state.left_at.get_or_insert_with(Instant::now);
+    if left.elapsed() >= LEAVE {
+        trace("pointer left the card; card closed");
+        state.overlay.hide_card();
+        state.left_at = None;
+    }
+}
+
 /// Starts the green glow on the words about to be accepted.
 fn flash(state: &mut State, indices: &[usize]) {
     let rects: Vec<CGRect> = state
@@ -620,10 +714,8 @@ fn flash(state: &mut State, indices: &[usize]) {
 
 /// One fix, through Accessibility if the app honours it and as a paste over a
 /// selection if it does not.
-fn accept_one(state: &mut State, index: usize) {
-    let Some(fix) = state.fixes.get(index).cloned() else {
-        return;
-    };
+fn accept_fix(state: &mut State, fix: &Fix) {
+    let fix = fix.clone();
     let Some(field) = &state.field else {
         return;
     };
@@ -921,6 +1013,7 @@ pub fn run() -> anyhow::Result<()> {
         flashing: None,
         card_stale: None,
         woken: HashSet::new(),
+        misses: 0,
         ai_error: None,
         ai_current: false,
         trusted,

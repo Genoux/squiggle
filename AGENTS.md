@@ -88,6 +88,13 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
   closed. Closing on every rebuild made a card vanish a second after it
   opened, when the model's answer arrived. Actions apply the fix the card
   shows (`showing`), not the index the button was drawn with.
+- A card never closes from under the pointer. Two causes looked like
+  "hiding for no reason": one unanswered accessibility question (Chromium
+  misses the 150ms deadline when busy) was read as focus leaving, and the
+  model withdrawing Harper's suggestion closed the card being read. Now a
+  field is dropped only after `GRACE` (8) misses in a row, and a withdrawn
+  card stays as `ORPHAN` - accepting still works from `card_fix` - until the
+  pointer leaves. Abnormal closes are logged; `GRAMLY_TRACE=1` logs all.
 - Every app is sent `AXManualAccessibility = true` once when it first comes
   forward (`ax::wake`). Electron and Chromium build no accessibility tree
   without it, which is how Grammarly works in a Claude or Slack text box
