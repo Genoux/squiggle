@@ -45,6 +45,19 @@ pub fn trusted(prompt: bool) -> bool {
 
 pub struct Field {
     element: CFRetained<AXUIElement>,
+    /// Whether the field answers `AXBoundsForRange` itself; `None` until
+    /// asked. Chromium's text areas answer with an empty rectangle at x = 0
+    /// for every range, so they are measured through their text children.
+    own_bounds: std::cell::Cell<Option<bool>>,
+    /// The field's text children for the text they were read for: where each
+    /// one starts in the field's value (UTF-16) and how long it is.
+    segments: std::cell::RefCell<Option<(String, Vec<Segment>)>>,
+}
+
+struct Segment {
+    start: usize,
+    len: usize,
+    element: CFRetained<AXUIElement>,
 }
 
 impl PartialEq for Field {
@@ -168,7 +181,7 @@ pub fn explain_focus() -> Result<Field, String> {
         return Err(format!("{app}: the focused {role} is not editable text"));
     }
     unsafe { element.set_messaging_timeout(MESSAGING_TIMEOUT) };
-    Ok(Field { element })
+    Ok(Field::new(element))
 }
 
 /// The focused element, asked of the system first and of the frontmost app
@@ -198,6 +211,14 @@ fn focused_element(system: &AXUIElement) -> Result<CFRetained<AXUIElement>, Stri
 }
 
 impl Field {
+    fn new(element: CFRetained<AXUIElement>) -> Self {
+        Self {
+            element,
+            own_bounds: std::cell::Cell::new(None),
+            segments: std::cell::RefCell::new(None),
+        }
+    }
+
     pub fn value(&self) -> Option<String> {
         string_attribute(&self.element, "AXValue")
     }
@@ -237,9 +258,22 @@ impl Field {
     }
 
     /// Where a UTF-16 range is drawn, in the same coordinates as [`frame`].
-    /// Apps that do not implement it, or report an empty rectangle for text
-    /// scrolled out of view, get `None` and that fix is simply not drawn.
+    /// Asked of the field, or of the text child holding the range when the
+    /// field cannot say. `None` and that fix is simply not drawn.
     pub fn bounds(&self, location: usize, length: usize) -> Option<CGRect> {
+        if self.own_bounds.get() != Some(false) {
+            let own = self.own(location, length);
+            if self.own_bounds.get().is_none() {
+                self.own_bounds.set(Some(own.is_some()));
+            }
+            if own.is_some() {
+                return own;
+            }
+        }
+        self.through_children(location, length)
+    }
+
+    fn own(&self, location: usize, length: usize) -> Option<CGRect> {
         let range = range_value(location, length)?;
         let name = CFString::from_static_str("AXBoundsForRange");
         let mut value: *const CFType = std::ptr::null();
@@ -258,6 +292,30 @@ impl Field {
         let mut rect = CGRect::default();
         let ok = unsafe { value.value(AXValueType::CGRect, NonNull::from(&mut rect).cast()) };
         (ok && rect.size.width > 0.5 && rect.size.height > 0.5).then_some(rect)
+    }
+
+    /// The range measured in the text child that holds it. Children are
+    /// matched to the field's value in order, by their own text, so a
+    /// paragraph break the field adds between them does not shift anything.
+    fn through_children(&self, location: usize, length: usize) -> Option<CGRect> {
+        let text = self.value()?;
+        let stale = self
+            .segments
+            .borrow()
+            .as_ref()
+            .is_none_or(|(read_for, _)| *read_for != text);
+        if stale {
+            let segments = segments_of(&self.element, &text);
+            *self.segments.borrow_mut() = Some((text, segments));
+        }
+        let cache = self.segments.borrow();
+        let (_, segments) = cache.as_ref()?;
+        let segment = segments
+            .iter()
+            .find(|s| location >= s.start && location < s.start + s.len.max(1))?;
+        let local = location - segment.start;
+        let length = length.min(segment.len - local).max(1);
+        Field::new(segment.element.clone()).own(local, length)
     }
 
     /// Selects a UTF-16 range in the field.
@@ -296,4 +354,173 @@ fn intersect(a: CGRect, b: CGRect) -> CGRect {
         CGPoint::new(x0, y0),
         CGSize::new((x1 - x0).max(0.0), (y1 - y0).max(0.0)),
     )
+}
+
+/// A raw description of whatever has focus, for `gramly doctor --raw`: the
+/// app, role and every attribute name it offers, and nothing of its text.
+pub fn describe_focus() -> String {
+    let system = unsafe { AXUIElement::new_system_wide() };
+    unsafe { system.set_messaging_timeout(MESSAGING_TIMEOUT) };
+    let element = match focused_element(&system) {
+        Ok(element) => element,
+        Err(reason) => return reason,
+    };
+    let mut pid: i32 = 0;
+    unsafe { element.pid(NonNull::from(&mut pid)) };
+    let names = |parameterized: bool| -> Vec<String> {
+        let mut array: *const objc2_core_foundation::CFArray = std::ptr::null();
+        let error = unsafe {
+            if parameterized {
+                element.copy_parameterized_attribute_names(NonNull::from(&mut array))
+            } else {
+                element.copy_attribute_names(NonNull::from(&mut array))
+            }
+        };
+        if error != AXError::Success || array.is_null() {
+            return vec![format!("<{error:?}>")];
+        }
+        let array: CFRetained<objc2_core_foundation::CFArray> =
+            unsafe { CFRetained::from_raw(NonNull::new_unchecked(array as *mut _)) };
+        let count = array.count();
+        (0..count)
+            .filter_map(|i| {
+                let item = unsafe { array.value_at_index(i) };
+                let item = unsafe { &*(item as *const CFType) };
+                item.downcast_ref::<CFString>().map(|s| s.to_string())
+            })
+            .collect()
+    };
+    let value = attribute(&element, "AXValue");
+    let value_kind = match &value {
+        None => "none".to_string(),
+        Some(v) => match v.downcast_ref::<CFString>() {
+            Some(s) => format!("string of {} chars", s.to_string().chars().count()),
+            None => "not a string".to_string(),
+        },
+    };
+    format!(
+        "app {}\nrole {:?} / {:?}\nAXValue {value_kind}\nsettable AXValue {} / AXSelectedText {}\nattributes {:?}\nparameterized {:?}",
+        bundle_id(pid),
+        string_attribute(&element, "AXRole"),
+        string_attribute(&element, "AXSubrole"),
+        settable(&element, "AXValue"),
+        settable(&element, "AXSelectedText"),
+        names(false),
+        names(true),
+    )
+}
+
+/// The raw answer to AXBoundsForRange, for doctor.
+pub fn probe_bounds(location: usize, length: usize) -> String {
+    let Ok(field) = explain_focus() else {
+        return "no field".into();
+    };
+    let Some(range) = range_value(location, length) else {
+        return "no range".into();
+    };
+    let name = CFString::from_static_str("AXBoundsForRange");
+    let mut value: *const CFType = std::ptr::null();
+    let error = unsafe {
+        field
+            .element
+            .copy_parameterized_attribute_value(&name, &range, NonNull::from(&mut value))
+    };
+    if error != AXError::Success || value.is_null() {
+        return format!("error {error:?}");
+    }
+    let value = unsafe { CFRetained::from_raw(NonNull::new_unchecked(value as *mut CFType)) };
+    let Some(value) = value.downcast_ref::<AXValue>() else {
+        return "not an AXValue".into();
+    };
+    let mut rect = CGRect::default();
+    let ok = unsafe { value.value(AXValueType::CGRect, NonNull::from(&mut rect).cast()) };
+    format!("ok={ok} {rect:?}")
+}
+
+/// The focused element's descendants (two levels), their roles, text
+/// lengths and what AXBoundsForRange says for their first characters.
+pub fn probe_children() -> String {
+    let Ok(field) = explain_focus() else {
+        return "no field".into();
+    };
+    let mut out = String::new();
+    let mut stack: Vec<(CFRetained<AXUIElement>, usize)> = children_of(&field.element)
+        .into_iter()
+        .map(|c| (c, 1))
+        .collect();
+    while let Some((child, depth)) = stack.pop() {
+        let role = string_attribute(&child, "AXRole").unwrap_or_default();
+        let len = string_attribute(&child, "AXValue").map(|v| v.chars().count());
+        let frame = attribute(&child, "AXPosition")
+            .and_then(|p| point_of(&p))
+            .zip(attribute(&child, "AXSize").and_then(|s| size_of(&s)));
+        let probe = Field::new(child.clone()).own(0, 2);
+        out.push_str(&format!(
+            "{}{role} value_len={len:?} frame={frame:?} bounds(0,2)={probe:?}\n",
+            "  ".repeat(depth)
+        ));
+        if depth < 3 {
+            stack.extend(children_of(&child).into_iter().map(|c| (c, depth + 1)));
+        }
+    }
+    out
+}
+
+fn children_of(element: &AXUIElement) -> Vec<CFRetained<AXUIElement>> {
+    let Some(list) = attribute(element, "AXChildren") else {
+        return Vec::new();
+    };
+    let Some(array) = list.downcast_ref::<objc2_core_foundation::CFArray>() else {
+        return Vec::new();
+    };
+    (0..array.count())
+        .filter_map(|i| {
+            let item = unsafe { &*(array.value_at_index(i) as *const CFType) };
+            item.downcast_ref::<AXUIElement>()
+                .map(|e| unsafe { CFRetained::retain(NonNull::from(e)) })
+        })
+        .collect()
+}
+
+/// The `AXStaticText` descendants of a field, in reading order, placed in
+/// the field's value. Bounded: a field with thousands of nodes is not a chat
+/// box, and walking it every edit would cost more than the underline is
+/// worth.
+fn segments_of(field: &AXUIElement, text: &str) -> Vec<Segment> {
+    const MOST_NODES: usize = 400;
+    let units: Vec<u16> = text.encode_utf16().collect();
+    let mut out = Vec::new();
+    let mut cursor = 0;
+    let mut visited = 0;
+    let mut stack: Vec<CFRetained<AXUIElement>> = children_of(field).into_iter().rev().collect();
+    while let Some(node) = stack.pop() {
+        visited += 1;
+        if visited > MOST_NODES {
+            break;
+        }
+        if string_attribute(&node, "AXRole").as_deref() == Some("AXStaticText") {
+            let Some(piece) = string_attribute(&node, "AXValue") else {
+                continue;
+            };
+            let piece: Vec<u16> = piece.encode_utf16().collect();
+            if piece.is_empty() {
+                continue;
+            }
+            if let Some(found) = units[cursor..]
+                .windows(piece.len())
+                .position(|w| w == piece.as_slice())
+            {
+                let start = cursor + found;
+                cursor = start + piece.len();
+                out.push(Segment {
+                    start,
+                    len: piece.len(),
+                    element: node,
+                });
+            }
+            continue;
+        }
+        stack.extend(children_of(&node).into_iter().rev());
+    }
+    out
 }

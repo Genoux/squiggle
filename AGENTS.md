@@ -92,6 +92,13 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
   forward (`ax::wake`). Electron and Chromium build no accessibility tree
   without it, which is how Grammarly works in a Claude or Slack text box
   where Gramly showed nothing.
+- Chromium text areas (the ChatGPT/Codex app, and likely every Electron
+  composer) answer `AXBoundsForRange` with an empty rectangle at x = 0 for
+  any range. Their `AXStaticText` children answer correctly, so
+  `Field::bounds` falls back to those: children are matched to the field's
+  value in order by their own text, then asked for the local range. Text
+  markers (`AXBoundsForTextMarkerRange`) were tried first and returned the
+  whole window. `gramly doctor --raw` prints the tree when an app misbehaves.
 - The underline panel ignores the mouse, so clicks reach the text. Hover is
   detected by polling the pointer position against the word rectangles.
 - Writing a fix: select the range, set `AXSelectedText`, then **read the value

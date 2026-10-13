@@ -38,6 +38,13 @@ pub fn doctor() -> anyhow::Result<()> {
         // Electron builds its tree on the request; give it a moment.
         std::thread::sleep(std::time::Duration::from_millis(400));
     }
+    if std::env::args().any(|a| a == "--raw") {
+        println!("{}", ax::describe_focus());
+        print!("{}", ax::probe_children());
+        for (at, len) in [(0, 2), (4, 2)] {
+            println!("raw bounds({at},{len}) {}", ax::probe_bounds(at, len));
+        }
+    }
     match ax::explain_focus() {
         Err(reason) => println!("focused field    none: {reason}"),
         Ok(field) => {
