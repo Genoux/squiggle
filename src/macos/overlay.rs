@@ -155,54 +155,6 @@ fn label(runs: &[Run], mtm: MainThreadMarker) -> Retained<NSTextField> {
     NSTextField::labelWithAttributedString(&styled(runs), mtm)
 }
 
-/// A flat button: a filled one for Accept, plain text for the rest, as the
-/// card in Grammarly draws them - a row of bezelled system buttons read as a
-/// dialog, not as a suggestion.
-fn flat(
-    title: &str,
-    filled: bool,
-    target: &AnyObject,
-    action: Sel,
-    tag: isize,
-    mtm: MainThreadMarker,
-) -> Retained<NSButton> {
-    let button = unsafe {
-        NSButton::buttonWithTitle_target_action(
-            &NSString::from_str(title),
-            Some(target),
-            Some(action),
-            mtm,
-        )
-    };
-    button.setTag(tag);
-    button.setBordered(false);
-    let color = if filled {
-        theme::ON_ACCENT
-    } else {
-        theme::MUTED
-    };
-    let weight = if filled {
-        unsafe { NSFontWeightSemibold }
-    } else {
-        unsafe { NSFontWeightMedium }
-    };
-    button.setAttributedTitle(&styled(&[Run {
-        text: title,
-        color,
-        size: 13.0,
-        weight,
-        struck: false,
-    }]));
-    if filled {
-        button.setWantsLayer(true);
-        if let Some(layer) = button.layer() {
-            layer.setBackgroundColor(Some(&theme::cg(theme::ACCENT)));
-            layer.setCornerRadius(6.0);
-        }
-    }
-    button
-}
-
 pub struct Overlay {
     mtm: MainThreadMarker,
     marks_panel: Retained<NSPanel>,
@@ -210,6 +162,9 @@ pub struct Overlay {
     card: Retained<NSPanel>,
     /// The fix the card is showing.
     pub card_for: Option<usize>,
+    /// The card's hoverable rows, and which one the pointer is over.
+    rows: Vec<Row>,
+    lit: Option<usize>,
     pill: Retained<NSPanel>,
     pill_count: usize,
 }
@@ -222,6 +177,8 @@ impl Overlay {
             drawn: Vec::new(),
             card: panel(mtm, true),
             card_for: None,
+            rows: Vec::new(),
+            lit: None,
             pill: panel(mtm, true),
             pill_count: 0,
         }
@@ -306,11 +263,13 @@ impl Overlay {
         let Some((_, fix)) = group.iter().find(|(i, _)| *i == index) else {
             return;
         };
-        let view = if group.len() > 1 {
+        let (view, rows) = if group.len() > 1 {
             sentence_card(index, group, text, target, self.mtm)
         } else {
             word_card(index, fix, text, target, self.mtm)
         };
+        self.rows = rows;
+        self.lit = None;
         let size = view.frame().size;
         self.card.setContentView(Some(&view));
 
@@ -329,6 +288,37 @@ impl Overlay {
             self.card.orderOut(None);
         }
         self.card_for = None;
+        self.rows.clear();
+        self.lit = None;
+    }
+
+    /// Lights the row under the pointer. Driven by the same poll as the
+    /// underlines: the card never becomes key, so it gets no tracking-area
+    /// events of its own. The fade is short - long enough to read as a
+    /// response, short enough that sweeping down the rows does not trail.
+    pub fn hover(&mut self, mouse: CGPoint) {
+        if !self.card.isVisible() {
+            return;
+        }
+        let origin = self.card.frame().origin;
+        let at = CGPoint::new(mouse.x - origin.x, mouse.y - origin.y);
+        let now = self
+            .rows
+            .iter()
+            .position(|row| contains(row.view.frame(), at));
+        if now == self.lit {
+            return;
+        }
+        CATransaction::begin();
+        CATransaction::setAnimationDuration(0.12);
+        for (i, row) in self.rows.iter().enumerate() {
+            if let Some(layer) = row.view.layer() {
+                let color = if Some(i) == now { row.hover } else { row.rest };
+                layer.setBackgroundColor(Some(&theme::cg(color)));
+            }
+        }
+        CATransaction::commit();
+        self.lit = now;
     }
 
     /// "3 fixes · Accept all", tucked inside the field's bottom-right corner
@@ -419,7 +409,87 @@ impl Overlay {
     }
 }
 
-/// What the small card says above the replacement. The model's reason is
+/// A row of the card that lights on hover and acts on click: a container
+/// view whose layer is the highlight, its content, and a transparent button
+/// over the whole of it, so the row is the target and not just its words.
+struct Row {
+    view: Retained<NSView>,
+    rest: theme::Rgba,
+    hover: theme::Rgba,
+}
+
+const CLEAR: theme::Rgba = theme::Rgba {
+    r: 0.0,
+    g: 0.0,
+    b: 0.0,
+    a: 0.0,
+};
+
+fn row(
+    frame: CGRect,
+    rest: theme::Rgba,
+    hover: theme::Rgba,
+    action: Sel,
+    tag: isize,
+    target: &AnyObject,
+    mtm: MainThreadMarker,
+) -> Row {
+    let view = NSView::initWithFrame(NSView::alloc(mtm), frame);
+    view.setWantsLayer(true);
+    still(|| {
+        if let Some(layer) = view.layer() {
+            layer.setCornerRadius(8.0);
+            layer.setBackgroundColor(Some(&theme::cg(rest)));
+        }
+    });
+    let cover = unsafe {
+        NSButton::buttonWithTitle_target_action(
+            &NSString::from_str(""),
+            Some(target),
+            Some(action),
+            mtm,
+        )
+    };
+    cover.setTag(tag);
+    cover.setBordered(false);
+    cover.setTransparent(true);
+    cover.setFrame(CGRect::new(CGPoint::new(0.0, 0.0), frame.size));
+    // Added last by `finish`, so it sits above the row's content.
+    Row { view, rest, hover }.with_cover(cover)
+}
+
+impl Row {
+    fn with_cover(self, cover: Retained<NSButton>) -> Self {
+        self.view.addSubview(&cover);
+        self
+    }
+
+    /// Adds content under the cover button.
+    fn add(&self, content: &NSView) {
+        let cover = self.view.subviews().lastObject();
+        match cover {
+            Some(cover) => self.view.addSubview_positioned_relativeTo(
+                content,
+                objc2_app_kit::NSWindowOrderingMode::Below,
+                Some(&cover),
+            ),
+            None => self.view.addSubview(content),
+        }
+    }
+}
+
+fn icon(symbol: &str, color: theme::Rgba, mtm: MainThreadMarker) -> Option<Retained<NSView>> {
+    let image = objc2_app_kit::NSImage::imageWithSystemSymbolName_accessibilityDescription(
+        &NSString::from_str(symbol),
+        None,
+    )?;
+    image.setTemplate(true);
+    let view = objc2_app_kit::NSImageView::imageViewWithImage(&image, mtm);
+    view.setContentTintColor(Some(&theme::ns(color)));
+    Some(Retained::into_super(Retained::into_super(view)))
+}
+
+/// What the small card says above the replacement. The model's titles are
 /// written for this; Harper's messages are written for a list ("Did you mean
 /// to spell recieve this way?") and read oddly as a title, so local fixes get
 /// a plain one.
@@ -449,20 +519,27 @@ fn card_view(width: f64, height: f64, mtm: MainThreadMarker) -> Retained<NSView>
     view
 }
 
-const PAD: f64 = 16.0;
+/// Space between the card's edge and its rows.
+const EDGE_PAD: f64 = 6.0;
+/// Space inside a row; title, replacement and the action labels all start
+/// at this inset so they share one left edge.
+const ROW_PAD: f64 = 12.0;
 
-/// Title, the replacement as the thing to click, then Dismiss - and Add to
-/// dictionary for a spelling. Nothing else: one word needs one decision.
+/// The suggestion as one big target - title over the replacement - then a
+/// Dismiss row and, for a spelling, an Add to dictionary row. The rows are
+/// the whole interface: no buttons to aim at.
 fn word_card(
     index: usize,
     fix: &Fix,
     text: &str,
     target: &AnyObject,
     mtm: MainThreadMarker,
-) -> Retained<NSView> {
+) -> (Retained<NSView>, Vec<Row>) {
     let tag = index as isize;
     let regular = unsafe { NSFontWeightRegular };
+    let medium = unsafe { NSFontWeightMedium };
     let bold = unsafe { NSFontWeightSemibold };
+
     let heading = label(
         &[Run {
             text: &title(fix),
@@ -474,79 +551,119 @@ fn word_card(
         mtm,
     );
     heading.setLineBreakMode(NSLineBreakMode::ByTruncatingTail);
-
     let original = fix.original(text);
     let shown = if fix.replacement.is_empty() {
         format!("Remove “{original}”")
     } else {
         fix.replacement.clone()
     };
-    let choice = flat(&shown, false, target, objc2::sel!(accept:), tag, mtm);
-    choice.setAttributedTitle(&styled(&[Run {
-        text: &shown,
-        color: theme::ACCENT,
-        size: 18.0,
-        weight: bold,
-        struck: false,
-    }]));
-    let dismiss = flat("Dismiss", false, target, objc2::sel!(dismiss:), tag, mtm);
-    let learn = (fix.kind == Kind::Spelling).then(|| {
-        flat(
-            "Add to dictionary",
-            false,
-            target,
-            objc2::sel!(learn:),
-            tag,
-            mtm,
-        )
-    });
+    let choice = label(
+        &[Run {
+            text: &shown,
+            color: theme::ACCENT,
+            size: 18.0,
+            weight: bold,
+            struck: false,
+        }],
+        mtm,
+    );
+    choice.setLineBreakMode(NSLineBreakMode::ByTruncatingTail);
 
-    let width = (heading.fittingSize().width + PAD * 2.0)
-        .max(choice.fittingSize().width + PAD * 2.0)
-        .clamp(220.0, 340.0);
-    let inner = width - PAD * 2.0;
-    let rows: Vec<(&NSView, f64, f64)> = [
-        Some((&*heading as &NSView, 16.0, 6.0)),
-        Some((&*choice as &NSView, 26.0, 8.0)),
-        Some((&*dismiss as &NSView, 24.0, 0.0)),
-        learn.as_ref().map(|l| (&**l as &NSView, 24.0, 0.0)),
-    ]
-    .into_iter()
-    .flatten()
-    .collect();
-    let height = PAD * 2.0 + rows.iter().map(|(_, h, gap)| h + gap).sum::<f64>();
-    let view = card_view(width, height, mtm);
-    let mut top = height - PAD;
-    for (row, h, gap) in rows {
-        top -= h;
-        // Buttons hug the left edge like the title above them; a centred
-        // button title would sit indented from it.
-        let x = if std::ptr::eq(row, &*heading as &NSView) {
-            PAD
-        } else {
-            PAD - 4.0
-        };
-        row.setFrame(CGRect::new(CGPoint::new(x, top), CGSize::new(inner, h)));
-        if let Some(button) = row.downcast_ref::<NSButton>() {
-            button.setAlignment(objc2_app_kit::NSTextAlignment::Left);
-        }
-        view.addSubview(row);
-        top -= gap;
+    let mut actions: Vec<(&str, &str, Sel)> = vec![("trash", "Dismiss", objc2::sel!(dismiss:))];
+    if fix.kind == Kind::Spelling {
+        actions.push(("book.closed", "Add to dictionary", objc2::sel!(learn:)));
     }
-    view
+
+    let content = heading
+        .fittingSize()
+        .width
+        .max(choice.fittingSize().width)
+        .max(150.0);
+    let width = (content + (ROW_PAD + EDGE_PAD) * 2.0).clamp(240.0, 360.0);
+    let row_w = width - EDGE_PAD * 2.0;
+    let inner = row_w - ROW_PAD * 2.0;
+    let main_h = 64.0;
+    let action_h = 36.0;
+    let height = EDGE_PAD * 2.0 + main_h + action_h * actions.len() as f64;
+    let view = card_view(width, height, mtm);
+    let mut rows = Vec::new();
+
+    let mut top = height - EDGE_PAD - main_h;
+    let main = row(
+        CGRect::new(CGPoint::new(EDGE_PAD, top), CGSize::new(row_w, main_h)),
+        CLEAR,
+        theme::HOVER,
+        objc2::sel!(accept:),
+        tag,
+        target,
+        mtm,
+    );
+    heading.setFrame(CGRect::new(
+        CGPoint::new(ROW_PAD, main_h - 12.0 - 16.0),
+        CGSize::new(inner, 16.0),
+    ));
+    choice.setFrame(CGRect::new(
+        CGPoint::new(ROW_PAD, 10.0),
+        CGSize::new(inner, 24.0),
+    ));
+    main.add(&heading);
+    main.add(&choice);
+    view.addSubview(&main.view);
+    rows.push(main);
+
+    for (symbol, words, action) in actions {
+        top -= action_h;
+        let action_row = row(
+            CGRect::new(CGPoint::new(EDGE_PAD, top), CGSize::new(row_w, action_h)),
+            CLEAR,
+            theme::HOVER,
+            action,
+            tag,
+            target,
+            mtm,
+        );
+        let mut x = ROW_PAD;
+        if let Some(glyph) = icon(symbol, theme::MUTED, mtm) {
+            glyph.setFrame(CGRect::new(
+                CGPoint::new(x, (action_h - 16.0) / 2.0),
+                CGSize::new(16.0, 16.0),
+            ));
+            action_row.add(&glyph);
+            x += 26.0;
+        }
+        let caption = label(
+            &[Run {
+                text: words,
+                color: theme::TEXT,
+                size: 14.0,
+                weight: medium,
+                struck: false,
+            }],
+            mtm,
+        );
+        caption.setFrame(CGRect::new(
+            CGPoint::new(x, (action_h - 18.0) / 2.0),
+            CGSize::new(inner - x, 18.0),
+        ));
+        action_row.add(&caption);
+        view.addSubview(&action_row.view);
+        rows.push(action_row);
+    }
+    (view, rows)
 }
 
 /// The sentence with every change in place - struck in red, the
-/// replacement in green - and one button that makes all of them.
+/// replacement in green - then "Correct the sentence" and Dismiss.
 fn sentence_card(
     index: usize,
     group: &[(usize, Fix)],
     text: &str,
     target: &AnyObject,
     mtm: MainThreadMarker,
-) -> Retained<NSView> {
+) -> (Retained<NSView>, Vec<Row>) {
     let tag = index as isize;
     let regular = unsafe { NSFontWeightRegular };
+    let medium = unsafe { NSFontWeightMedium };
     let bold = unsafe { NSFontWeightSemibold };
     let chars: Vec<char> = text.chars().collect();
     let first = group.first().map(|(_, f)| f.start).unwrap_or(0);
@@ -595,29 +712,16 @@ fn sentence_card(
         .collect();
 
     let width = 380.0;
-    let inner = width - PAD * 2.0;
-    let kind = group
-        .iter()
-        .map(|(_, f)| f.kind)
-        .find(|k| *k != Kind::Clarity)
-        .unwrap_or(Kind::Clarity);
+    let pad = EDGE_PAD + ROW_PAD;
+    let inner = width - pad * 2.0;
     let heading = label(
-        &[
-            Run {
-                text: "●  ",
-                color: theme::kind(kind),
-                size: 10.0,
-                weight: regular,
-                struck: false,
-            },
-            Run {
-                text: "Correct the sentence",
-                color: theme::MUTED,
-                size: 13.0,
-                weight: regular,
-                struck: false,
-            },
-        ],
+        &[Run {
+            text: "Correct the sentence",
+            color: theme::MUTED,
+            size: 13.0,
+            weight: regular,
+            struck: false,
+        }],
         mtm,
     );
     let body = label(&runs, mtm);
@@ -625,47 +729,76 @@ fn sentence_card(
     body.setMaximumNumberOfLines(5);
     body.setPreferredMaxLayoutWidth(inner);
     let body_h = body.sizeThatFits(CGSize::new(inner, 400.0)).height.ceil();
-    let correct = flat(
-        "Correct the sentence",
-        true,
-        target,
-        objc2::sel!(acceptSentence:),
-        tag,
-        mtm,
-    );
-    let dismiss = flat(
-        "Dismiss",
-        false,
-        target,
-        objc2::sel!(dismissSentence:),
-        tag,
-        mtm,
-    );
 
-    let row_h = 32.0;
-    let height = PAD + 16.0 + 10.0 + body_h + 16.0 + row_h + PAD;
+    let button_h = 34.0;
+    let height = pad + 16.0 + 10.0 + body_h + 16.0 + button_h + EDGE_PAD + 8.0;
     let view = card_view(width, height, mtm);
-    let mut top = height - PAD - 16.0;
+    let mut top = height - pad - 16.0;
     heading.setFrame(CGRect::new(
-        CGPoint::new(PAD, top),
+        CGPoint::new(pad, top),
         CGSize::new(inner, 16.0),
     ));
     top -= 10.0 + body_h;
     body.setFrame(CGRect::new(
-        CGPoint::new(PAD - 2.0, top),
+        CGPoint::new(pad - 2.0, top),
         CGSize::new(inner + 4.0, body_h),
     ));
-    let correct_w = correct.fittingSize().width + 28.0;
-    correct.setFrame(CGRect::new(
-        CGPoint::new(PAD, PAD),
-        CGSize::new(correct_w, row_h),
+    view.addSubview(&heading);
+    view.addSubview(&body);
+
+    let mut rows = Vec::new();
+    let y = EDGE_PAD + 8.0;
+    let caption = |words: &str, color: theme::Rgba, weight: f64| {
+        label(
+            &[Run {
+                text: words,
+                color,
+                size: 14.0,
+                weight,
+                struck: false,
+            }],
+            mtm,
+        )
+    };
+    let correct_text = caption("Correct the sentence", theme::ON_ACCENT, bold);
+    let correct_w = correct_text.fittingSize().width + 32.0;
+    let correct = row(
+        CGRect::new(CGPoint::new(pad, y), CGSize::new(correct_w, button_h)),
+        theme::ACCENT,
+        theme::ACCENT_HOVER,
+        objc2::sel!(acceptSentence:),
+        tag,
+        target,
+        mtm,
+    );
+    correct_text.setFrame(CGRect::new(
+        CGPoint::new(16.0, (button_h - 18.0) / 2.0),
+        CGSize::new(correct_w - 32.0, 18.0),
     ));
-    dismiss.setFrame(CGRect::new(
-        CGPoint::new(PAD + correct_w + 10.0, PAD),
-        CGSize::new(dismiss.fittingSize().width + 12.0, row_h),
+    correct.add(&correct_text);
+    view.addSubview(&correct.view);
+    rows.push(correct);
+
+    let dismiss_text = caption("Dismiss", theme::TEXT, medium);
+    let dismiss_w = dismiss_text.fittingSize().width + 28.0;
+    let dismiss = row(
+        CGRect::new(
+            CGPoint::new(pad + correct_w + 8.0, y),
+            CGSize::new(dismiss_w, button_h),
+        ),
+        CLEAR,
+        theme::HOVER,
+        objc2::sel!(dismissSentence:),
+        tag,
+        target,
+        mtm,
+    );
+    dismiss_text.setFrame(CGRect::new(
+        CGPoint::new(14.0, (button_h - 18.0) / 2.0),
+        CGSize::new(dismiss_w - 28.0, 18.0),
     ));
-    for sub in [&*heading as &NSView, &body, &correct, &dismiss] {
-        view.addSubview(sub);
-    }
-    view
+    dismiss.add(&dismiss_text);
+    view.addSubview(&dismiss.view);
+    rows.push(dismiss);
+    (view, rows)
 }

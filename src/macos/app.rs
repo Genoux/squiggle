@@ -373,6 +373,7 @@ impl Controller {
             .iter()
             .find(|(_, rect)| overlay::contains(grow(*rect, 2.0), mouse))
             .map(|(index, _)| *index);
+        state.overlay.hover(mouse);
         let over_card = state
             .overlay
             .card_frame()

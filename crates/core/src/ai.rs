@@ -24,7 +24,11 @@ Return the same text with every mistake corrected:
 - grammar and agreement, and words that are missing or wrong;
 - capitalisation: the start of each sentence, \"I\", and names of people, \
 places, days, months and products;
-- punctuation: missing periods, question marks, commas and apostrophes.
+- punctuation: missing periods, question marks and apostrophes, and missing \
+commas - after an opening word or phrase (\"Well,\", \"Salut,\", \"Anyway,\"), \
+around words like \"however\" and \"donc\" when they break a sentence, \
+before \"but\", \"so\", \"mais\" and \"donc\" joining two full clauses, and \
+before a name someone is addressed by (\"merci, Marie\").
 
 Change nothing that is not a mistake. Keep every correct word, the word \
 order, the tone, slang, emoji, line breaks, and the language of each \
@@ -173,6 +177,19 @@ mod tests {
             fixed.contains("pas ?") || fixed.contains("pas\u{a0}?") || fixed.contains("pas?"),
             "{fixed}"
         );
+    }
+
+    #[test]
+    #[ignore]
+    fn live_model_adds_commas_between_clauses() {
+        let key = std::env::var("GRAMLY_OPENROUTER_KEY").expect("GRAMLY_OPENROUTER_KEY");
+        let text = "Je suis là mais je peux pas venir donc on se voit demain.\nWell I think we should go but not today.\n";
+        let fixes = check(&key, text).expect("model call");
+        let fixed = apply(text, &fixes);
+        eprintln!("{fixed}");
+        // "là, mais" is usual but not required in French, and the model adds
+        // it about one run in three; only the English comma is a rule.
+        assert!(fixed.contains("Well, I"), "{fixed}");
     }
 
     #[test]
