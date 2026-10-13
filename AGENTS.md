@@ -39,8 +39,11 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
 - Titles are generic, as Grammarly's are ("Correct your spelling",
   "Correct your punctuation"): the change explains itself, and titles naming
   the rule ("Majuscule et ponctuation") read as a lecture.
-- With the model on, Harper is not drawn at all - only the model's fixes,
-  a second after the pause. Drawing Harper first made every suggestion the
+- With the model on, Harper's spelling fixes (words not in the dictionary)
+  are drawn at once beside the model's, and nothing else of Harper's is:
+  an unknown word is a fact the model cannot overrule, and it catches what
+  the model leaves as ambiguous ("on the wike side"). Everything else waits
+  for the model, a second after the pause. Drawing Harper first made every suggestion the
   model disagreed with appear and then vanish, often while hovered (the log
   showed "card's fix withdrawn" each time). Harper draws when the model is
   off, failing, or has not answered within `MODEL_LATE` (4s).

@@ -377,6 +377,11 @@ impl Controller {
             state.local = rebase(&state.text, &text, &state.local);
             state.ai = rebase(&state.text, &text, &state.ai);
             state.fixes = rebase(&state.text, &text, &state.fixes);
+            trace(&format!(
+                "text changed: {} -> {} chars",
+                state.text.chars().count(),
+                text.chars().count()
+            ));
             state.text = text;
             state.placed.clear();
             state.fell_back = false;
@@ -460,10 +465,23 @@ impl Controller {
                 (location, length)
             };
             let key = (fix.start, fix.end);
+            let spacing = fix.original(&state.text).chars().all(char::is_whitespace);
             let Some(bounds) = state
                 .field
                 .as_ref()
                 .and_then(|f| f.bounds(location, length))
+                // A range that is only spaces may not be placed; a doubled
+                // space is drawn just after the character before it.
+                .or_else(|| {
+                    let f = state.field.as_ref()?;
+                    let before = f.bounds(location.checked_sub(1)?, 1)?;
+                    spacing.then(|| {
+                        CGRect::new(
+                            CGPoint::new(before.origin.x + before.size.width, before.origin.y),
+                            CGSize::new(8.0, before.size.height),
+                        )
+                    })
+                })
                 .inspect(|b| {
                     state.placed.insert(key, *b);
                 })
@@ -619,8 +637,20 @@ fn refilter(state: &mut State) {
     // failing, or later than `MODEL_LATE`.
     let model_coming =
         state.ai_on && state.ai_error.is_none() && state.submitted_at.elapsed() < MODEL_LATE;
+    //
+    // One kind of Harper fix is kept beside the model's: a word that is not
+    // in the dictionary. That is a fact, not a judgement the model can
+    // overrule, so it is drawn at once and never withdrawn - and it catches
+    // what the model leaves alone as ambiguous ("on the wike side": wide?
+    // wild?). A name it flags goes in the dictionary from its card.
     let base = if state.ai_current || model_coming {
-        state.ai.clone()
+        let unknown: Vec<Fix> = state
+            .local
+            .iter()
+            .filter(|f| f.kind == gramly_core::Kind::Spelling)
+            .cloned()
+            .collect();
+        merge(unknown, state.ai.clone())
     } else {
         merge(state.local.clone(), state.ai.clone())
     };
@@ -628,6 +658,19 @@ fn refilter(state: &mut State) {
         .into_iter()
         .filter(|fix| !dismissed.contains(&(fix.original(text), fix.replacement.clone())))
         .collect();
+    if std::env::var_os("GRAMLY_TRACE").is_some() {
+        let shown: Vec<String> = state
+            .fixes
+            .iter()
+            .map(|f| format!("{:?}->{:?}", f.original(&state.text), f.replacement))
+            .collect();
+        trace(&format!(
+            "fixes (local {}, model {}, model answered {}): {shown:?}",
+            state.local.len(),
+            state.ai.len(),
+            state.ai_current
+        ));
+    }
 
     // The open card follows its fix through the rebuild: same words and same
     // replacement, it stays exactly as it is; same words with a better

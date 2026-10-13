@@ -198,13 +198,19 @@ fn line_fixes(original: &str, corrected: &str) -> Vec<Fix> {
     let mut out = Vec::new();
     for (a_lo, a_hi, b_lo, b_hi) in found {
         let (mut a_lo, mut b_lo, mut a_hi, mut b_hi) = (a_lo, b_lo, a_hi, b_hi);
-        // Whitespace-only changes are left alone: a trailing newline the
-        // model dropped is not a mistake the writer made.
-        if a[a_lo..a_hi].iter().all(Token::space) && b[b_lo..b_hi].iter().all(Token::space) {
+        // Line breaks never reach here (lines are diffed apart), so a
+        // whitespace change is spacing inside a line: a doubled space is a
+        // mistake; trailing space at the end of a line is the writer
+        // mid-sentence, not one.
+        let spacing =
+            a[a_lo..a_hi].iter().all(Token::space) && b[b_lo..b_hi].iter().all(Token::space);
+        if spacing && a_hi == a.len() {
             continue;
         }
         // Nothing to underline for a pure insertion, so it takes the word
         // before it along ("think" → "think?"), or after it at the start.
+        // Spacing stays on the spaces: attached to the word before, it
+        // overlapped that word's own spelling fix and replaced it.
         if a_lo == a_hi {
             if let Some(prev) = (0..a_lo).rev().find(|&k| !a[k].space()) {
                 b_lo -= a_lo - prev;
@@ -309,6 +315,19 @@ mod tests {
             found.iter().all(|f| !f.original(text).contains('\n')),
             "{found:#?}"
         );
+    }
+
+    #[test]
+    fn a_doubled_space_is_a_fix_on_the_spaces() {
+        let text = "on the wike  side";
+        let found = round_trip(text, "on the wike side");
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].original(text), "  ");
+    }
+
+    #[test]
+    fn trailing_space_while_typing_is_not_a_fix() {
+        assert!(fixes("still typing ", "still typing").is_empty());
     }
 
     #[test]
