@@ -6,6 +6,7 @@
 
 pub mod ai;
 pub mod config;
+pub mod diff;
 pub mod fix;
 pub mod lang;
 pub mod local;

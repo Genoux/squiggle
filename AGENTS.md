@@ -23,16 +23,25 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
 - Two passes, two threads (`worker.rs`). Harper answers in milliseconds and
   draws first; the model answers in about a second and arrives as a second
   outcome for the same generation. Underlines never wait on the network.
-- The model returns edits, never a rewritten paragraph: a rewrite has to be
-  diffed back into edits to be underlined, and the diff of a paraphrase is one
-  edit nobody can accept a word of. Edits quote their words (`original`, plus
-  up to three words `before`) instead of giving offsets - models quote
-  reliably and count characters badly. `ai::locate` finds them; an edit whose
-  words are not in the text is dropped, never guessed onto the nearest match.
-- Edits over 80 chars are refused as rewrites.
-- Where Harper and the model mark the same words, the model wins
-  (`fix::merge`): Harper finds misspellings exactly but picks the replacement
-  from the dictionary alone.
+- The model returns the paragraph corrected; `diff.rs` turns the difference
+  into fixes. Asked for a list of edits instead, Haiku under-reported: it
+  fixed "i went" and left "paris", "monday" and a missing "?" on the same
+  line, every run. Correcting the text is the task it does completely.
+- `diff` is a word-level LCS (words, whitespace runs, single punctuation
+  marks), line by line so no fix ever crosses or eats a line break, merging
+  changes separated only by whitespace ("jpense" → "je pense que" is one
+  fix). A pure insertion takes the word before it ("think" → "think?").
+  A correction touching over 60% of a paragraph's words is a rewrite and is
+  dropped whole; a single fix over 80 chars is dropped.
+- A paragraph is sent with its line break when it has one. Without it every
+  paragraph looked unfinished and the model never added end punctuation;
+  the prompt says which case it is.
+- Titles ("Capitalization", "Majuscule", ...) come from the kind of change,
+  in the language of the sentence it is in.
+- Harper draws first and is the offline fallback; once the model has
+  answered for the current text, its fixes are the whole answer. Harper on
+  short French slang offered "Eat" for "ERT", and only runs on sentences
+  detected as clearly English.
 - The model is asked per paragraph, cached by exact paragraph text. Typing in
   one paragraph of a long email costs one request; refocusing costs none.
 - Pinned to `anthropic/claude-haiku-5.5` on the `anthropic` provider with

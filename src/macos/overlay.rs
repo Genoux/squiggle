@@ -536,8 +536,8 @@ fn word_card(
     view
 }
 
-/// The sentence with every change in place - struck in grey, the
-/// replacement in bold - and one button that makes all of them.
+/// The sentence with every change in place - struck in red, the
+/// replacement in green - and one button that makes all of them.
 fn sentence_card(
     index: usize,
     group: &[(usize, Fix)],
@@ -567,13 +567,13 @@ fn sentence_card(
         ));
         let original: String = chars[fix.start..fix.end].iter().collect();
         if !original.is_empty() {
-            pieces.push((original, theme::MUTED, regular, true));
+            pieces.push((original, theme::MISTAKE, regular, true));
             if !fix.replacement.is_empty() {
                 pieces.push((" ".into(), theme::TEXT, regular, false));
             }
         }
         if !fix.replacement.is_empty() {
-            pieces.push((fix.replacement.clone(), theme::TEXT, bold, false));
+            pieces.push((fix.replacement.clone(), theme::ACCENT, bold, false));
         }
         cursor = fix.end;
     }

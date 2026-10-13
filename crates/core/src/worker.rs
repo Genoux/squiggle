@@ -140,10 +140,24 @@ fn ai_loop(rx: Receiver<Request>, out: Sender<Outcome>) {
             continue;
         };
 
-        let pieces = paragraphs(&request.text);
+        // Each paragraph is asked with its line break when it has one, which
+        // is how the model knows it is finished (see `ai::FINISHED`). The
+        // cache is keyed by exactly what was asked.
+        let pieces: Vec<(usize, String)> = paragraphs(&request.text)
+            .into_iter()
+            .map(|(offset, line)| {
+                let next = request.text.chars().nth(offset + line.chars().count());
+                let asked = if next == Some('\n') {
+                    format!("{line}\n")
+                } else {
+                    line.to_string()
+                };
+                (offset, asked)
+            })
+            .collect();
         let missing: Vec<&str> = pieces
             .iter()
-            .map(|(_, p)| *p)
+            .map(|(_, p)| p.as_str())
             .filter(|p| !cache.contains_key(*p))
             .collect();
 
@@ -196,7 +210,7 @@ fn ai_loop(rx: Receiver<Request>, out: Sender<Outcome>) {
 
         let mut fixes = Vec::new();
         for (offset, paragraph) in &pieces {
-            if let Some(found) = cache.get(*paragraph) {
+            if let Some(found) = cache.get(paragraph) {
                 fixes.extend(found.iter().cloned().map(|mut fix| {
                     fix.start += offset;
                     fix.end += offset;
