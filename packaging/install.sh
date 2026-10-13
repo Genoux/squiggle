@@ -49,9 +49,36 @@ launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || true
 mkdir -p "$app/Contents/MacOS" "$agents" "$(dirname "$log")"
 cp "$binary" "$app/Contents/MacOS/gramly"
 sed "s/@VERSION@/$version/g" "$repo/packaging/macos/Info.plist" > "$app/Contents/Info.plist"
-# Ad-hoc signed. macOS ties the Accessibility grant to the signature, and an
-# ad-hoc signature changes with every build - see TROUBLESHOOTING.md.
-codesign --force --sign - --identifier "$label" "$app" >/dev/null
+# Signed with a local certificate, made once and kept in the login keychain.
+# macOS ties the Accessibility grant to the signature's designated
+# requirement: ad-hoc signing puts the build's hash in it, so every update
+# lost the grant; a certificate puts the certificate there instead, and the
+# grant survives every rebuild signed with it.
+identity="Gramly Local Signing"
+if ! security find-identity -p codesigning 2>/dev/null | grep -q "\"$identity\""; then
+  say "Creating the local signing certificate (once)"
+  scratch="$(mktemp -d)"
+  cat > "$scratch/cert.cnf" <<CNF
+[req]
+distinguished_name = dn
+x509_extensions = ext
+prompt = no
+[dn]
+CN = $identity
+[ext]
+basicConstraints = critical,CA:false
+keyUsage = critical,digitalSignature
+extendedKeyUsage = critical,codeSigning
+CNF
+  openssl req -x509 -newkey rsa:2048 -nodes -days 3650 -config "$scratch/cert.cnf" \
+    -keyout "$scratch/key.pem" -out "$scratch/cert.pem" 2>/dev/null
+  openssl pkcs12 -export -inkey "$scratch/key.pem" -in "$scratch/cert.pem" \
+    -out "$scratch/id.p12" -passout pass:gramly -name "$identity"
+  security import "$scratch/id.p12" -k "$HOME/Library/Keychains/login.keychain-db" \
+    -P gramly -T /usr/bin/codesign >/dev/null
+  rm -rf "$scratch"
+fi
+codesign --force --sign "$identity" --identifier "$label" "$app" 2>/dev/null
 
 sed -e "s#@APP@#$app#g" -e "s#@LOG@#$log#g" \
   "$repo/packaging/macos/$label.plist" > "$agents/$label.plist"

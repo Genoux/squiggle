@@ -94,6 +94,83 @@ pub fn merge(local: Vec<Fix>, ai: Vec<Fix>) -> Vec<Fix> {
     merged
 }
 
+/// Carries fixes across an edit so underlines stay put while the user types.
+///
+/// The edit is found as the span between the longest common prefix and
+/// suffix of the two texts - one contiguous change, which is what a keystroke,
+/// a paste, or an accepted fix is. Fixes before it keep their offsets, fixes
+/// after it shift by the change in length, and a fix the edit touched is
+/// dropped: its words are not the words it was about any more. Clearing every
+/// underline on every keystroke instead is what made them flicker.
+pub fn rebase(old: &str, new: &str, fixes: &[Fix]) -> Vec<Fix> {
+    let a: Vec<char> = old.chars().collect();
+    let b: Vec<char> = new.chars().collect();
+    let prefix = a.iter().zip(&b).take_while(|(x, y)| x == y).count();
+    let max_suffix = a.len().min(b.len()) - prefix;
+    let suffix = a
+        .iter()
+        .rev()
+        .zip(b.iter().rev())
+        .take(max_suffix)
+        .take_while(|(x, y)| x == y)
+        .count();
+    let old_end = a.len() - suffix;
+    let delta = b.len() as isize - a.len() as isize;
+    let removed = &a[prefix..old_end];
+    let inserted = &b[prefix..b.len() - suffix];
+    // A change touching a word's edge changes the word when it adds or
+    // removes letters there ("teh" → "tehh"), and does not when it is a
+    // space or punctuation ("teh" → "teh,").
+    let wordy = |c: Option<&char>| c.is_some_and(|c| c.is_alphanumeric() || *c == '\'');
+    let joins_left = wordy(inserted.first()) || wordy(removed.first());
+    let joins_right = wordy(inserted.last()) || wordy(removed.last());
+    fixes
+        .iter()
+        .filter_map(|fix| {
+            let before = fix.end < prefix || (fix.end == prefix && !joins_left);
+            let after = fix.start > old_end || (fix.start == old_end && !joins_right);
+            if before && fix.end <= prefix {
+                Some(fix.clone())
+            } else if after && fix.start >= old_end {
+                let mut moved = fix.clone();
+                moved.start = (fix.start as isize + delta) as usize;
+                moved.end = (fix.end as isize + delta) as usize;
+                Some(moved)
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+/// The sentence around char `at`, as `(start, end)` char offsets. A sentence
+/// ends after `.`, `!`, `?` or `…` followed by whitespace, or at a line break.
+/// Good enough to group fixes for "Correct the sentence"; an abbreviation
+/// ("e.g. this") splits a sentence early, which only means a smaller group.
+pub fn sentence(text: &str, at: usize) -> (usize, usize) {
+    let chars: Vec<char> = text.chars().collect();
+    let at = at.min(chars.len());
+    let ends = |i: usize| {
+        matches!(chars[i], '.' | '!' | '?' | '…')
+            && chars.get(i + 1).is_none_or(|c| c.is_whitespace())
+    };
+    let mut start = at;
+    while start > 0 && chars[start - 1] != '\n' && !ends(start - 1) {
+        start -= 1;
+    }
+    while start < at && chars[start].is_whitespace() {
+        start += 1;
+    }
+    let mut end = at;
+    while end < chars.len() && chars[end] != '\n' {
+        end += 1;
+        if ends(end - 1) {
+            break;
+        }
+    }
+    (start, end)
+}
+
 /// `text` with every fix applied. Fixes that overlap one already applied are
 /// skipped rather than guessed at, since either would leave the other's
 /// offsets pointing at the wrong words.
@@ -179,6 +256,61 @@ mod tests {
         assert_eq!(merged.len(), 2);
         assert_eq!(merged[0].replacement, "read");
         assert_eq!(merged[1].replacement, "the");
+    }
+
+    #[test]
+    fn typing_after_a_mistake_leaves_it_underlined() {
+        let old = "teh cat";
+        let fixes = [fix(0, 3, "the", Source::Local)];
+        assert_eq!(rebase(old, "teh cats", &fixes), fixes.to_vec());
+        assert_eq!(rebase("teh", "teh ", &fixes), fixes.to_vec());
+    }
+
+    #[test]
+    fn typing_before_a_mistake_moves_it() {
+        let old = "a teh cat";
+        let fixes = [fix(2, 5, "the", Source::Local)];
+        let new = "and a teh cat";
+        let moved = rebase(old, new, &fixes);
+        assert_eq!(moved[0].original(new), "teh");
+    }
+
+    #[test]
+    fn editing_the_mistake_drops_it() {
+        let fixes = [
+            fix(0, 3, "the", Source::Local),
+            fix(8, 11, "the", Source::Local),
+        ];
+        let old = "teh cat teh dog";
+        let new = "tehh cat teh dog";
+        let kept = rebase(old, new, &fixes);
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].original(new), "teh");
+    }
+
+    #[test]
+    fn accepting_one_fix_keeps_the_others_in_place() {
+        let old = "teh cat and teh dog";
+        let fixes = [
+            fix(0, 3, "the", Source::Local),
+            fix(12, 15, "the", Source::Local),
+        ];
+        let new = apply(old, &fixes[..1]);
+        let kept = rebase(old, &new, &fixes);
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].original(&new), "teh");
+    }
+
+    #[test]
+    fn sentence_bounds() {
+        let text = "Cool and nice. mais je pourai pas faire l'onneur. Fin";
+        let at = text.find("pourai").unwrap();
+        let (start, end) = sentence(text, at);
+        let found: String = text.chars().skip(start).take(end - start).collect();
+        assert_eq!(found, "mais je pourai pas faire l'onneur.");
+        let (start, end) = sentence(text, text.len());
+        let last: String = text.chars().skip(start).take(end - start).collect();
+        assert_eq!(last, "Fin");
     }
 
     #[test]

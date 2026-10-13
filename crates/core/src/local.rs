@@ -30,7 +30,24 @@ impl Local {
         self.known = words.into_iter().map(|w| w.to_lowercase()).collect();
     }
 
+    /// Fixes for the English paragraphs of `text`. Other languages are left
+    /// to the model; see `lang`.
     pub fn check(&mut self, text: &str) -> Vec<Fix> {
+        let mut fixes = Vec::new();
+        for (offset, paragraph) in crate::worker::paragraphs(text) {
+            if !crate::lang::detect(paragraph).local_pass() {
+                continue;
+            }
+            fixes.extend(self.check_english(paragraph).into_iter().map(|mut fix| {
+                fix.start += offset;
+                fix.end += offset;
+                fix
+            }));
+        }
+        fixes
+    }
+
+    fn check_english(&mut self, text: &str) -> Vec<Fix> {
         let document = Document::new_plain_english_curated(text);
         let source = document.get_source();
         let mut fixes = Vec::new();
@@ -114,6 +131,24 @@ mod tests {
     fn clean_text_has_nothing_to_say() {
         let mut local = Local::new(Dialect::American);
         assert!(local.check("The cat sat on the mat.").is_empty());
+    }
+
+    #[test]
+    fn french_is_not_a_page_of_misspellings() {
+        let mut local = Local::new(Dialect::American);
+        let text = "Je pense que nous devrions partir demain matin avant le petit déjeuner.";
+        assert!(local.check(text).is_empty());
+    }
+
+    #[test]
+    fn english_paragraph_after_a_french_one_is_still_checked() {
+        let mut local = Local::new(Dialect::American);
+        let text = "Je pense que nous devrions partir demain matin avant le petit déjeuner.\nThis sentance has a typo in it today.";
+        let fixes = local.check(text);
+        assert!(
+            fixes.iter().any(|f| f.original(text) == "sentance"),
+            "{fixes:?}"
+        );
     }
 
     #[test]

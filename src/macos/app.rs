@@ -11,7 +11,7 @@ use crate::macos::ax::{self, Field};
 use crate::macos::overlay::{self, Mark, Overlay};
 use crate::macos::paste;
 use gramly_core::worker::{Outcome, Worker};
-use gramly_core::{Config, Fix, apply, config, merge};
+use gramly_core::{Config, Fix, apply, config, merge, rebase, sentence};
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, NSObject, NSObjectProtocol};
 use objc2::{
@@ -28,16 +28,19 @@ use std::cell::RefCell;
 use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
-const TICK: f64 = 0.1;
-/// Typing must pause this long before a check is asked for. Shorter and the
-/// model is asked about half-typed words; longer and the underlines feel late.
-const PAUSE: Duration = Duration::from_millis(450);
-/// Hovering a word this long opens its card: long enough that sweeping the
+/// 50ms: hover is a poll of the pointer, so this is the card's worst-case
+/// latency. At 100ms the card read as sluggish next to Grammarly's.
+const TICK: f64 = 0.05;
+/// Typing must pause this long before a check is asked for. Underlines no
+/// longer clear while typing (see `rebase`), so this only decides how soon a
+/// *new* mistake is marked; 450ms felt late.
+const PAUSE: Duration = Duration::from_millis(250);
+/// Hovering a word this long opens its card - just enough that sweeping the
 /// pointer across a paragraph does not flash cards open.
-const HOVER: Duration = Duration::from_millis(150);
+const HOVER: Duration = Duration::from_millis(40);
 /// Leaving word and card this long closes the card, so crossing the gap
 /// between them does not.
-const LEAVE: Duration = Duration::from_millis(300);
+const LEAVE: Duration = Duration::from_millis(180);
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 struct State {
@@ -121,6 +124,29 @@ define_class!(
                 // Re-check so the other places that word was flagged clear too.
                 state.submitted = false;
                 state.changed_at = Instant::now() - PAUSE;
+            });
+        }
+
+        #[unsafe(method(acceptSentence:))]
+        fn accept_sentence(&self, sender: &AnyObject) {
+            let index = tag(sender);
+            self.with_state(|state, _| {
+                let indices: Vec<usize> =
+                    group(state, index).into_iter().map(|(i, _)| i).collect();
+                accept_fixes(state, &indices);
+            });
+        }
+
+        #[unsafe(method(dismissSentence:))]
+        fn dismiss_sentence(&self, sender: &AnyObject) {
+            let index = tag(sender);
+            self.with_state(|state, _| {
+                for (_, fix) in group(state, index) {
+                    let original = fix.original(&state.text);
+                    state.dismissed.insert((original, fix.replacement.clone()));
+                }
+                state.overlay.hide_card();
+                refilter(state);
             });
         }
 
@@ -255,15 +281,17 @@ impl Controller {
             return;
         };
         if text != state.text {
+            // Carried across the edit rather than cleared: the underlines the
+            // edit did not touch stay where they are, so typing and accepting
+            // never make the rest flicker.
+            state.local = rebase(&state.text, &text, &state.local);
+            state.ai = rebase(&state.text, &text, &state.ai);
+            state.fixes = rebase(&state.text, &text, &state.fixes);
             state.text = text;
             state.changed_at = Instant::now();
             state.submitted = false;
             state.generation += 1;
-            state.local.clear();
-            state.ai.clear();
-            state.fixes.clear();
-            state.words.clear();
-            state.overlay.hide_all();
+            state.overlay.hide_card();
         }
         if !state.submitted && state.changed_at.elapsed() >= PAUSE {
             state.submitted = true;
@@ -358,11 +386,11 @@ impl Controller {
                 if since.elapsed() >= HOVER
                     && let Some((_, word)) = state.words.iter().find(|(i, _)| *i == index)
                 {
-                    let fix = state.fixes[index].clone();
-                    let original = fix.original(&state.text);
+                    let members = group(state, index);
+                    let word = *word;
                     state
                         .overlay
-                        .show_card(index, &fix, &original, *word, self.target());
+                        .show_card(index, &members, &state.text, word, self.target());
                 }
             }
             None if over_card => state.left_at = None,
@@ -379,14 +407,20 @@ impl Controller {
         }
 
         // Draw.
-        let highlighted = state.overlay.card_for;
+        // Everything the open card would change is lit, so a sentence card
+        // shows which words "Correct the sentence" touches.
+        let highlighted: Vec<usize> = state
+            .overlay
+            .card_for
+            .map(|i| group(state, i).into_iter().map(|(i, _)| i).collect())
+            .unwrap_or_default();
         let marks: Vec<Mark> = state
             .words
             .iter()
             .map(|(index, rect)| Mark {
                 rect: *rect,
                 kind: state.fixes[*index].kind,
-                highlighted: highlighted == Some(*index),
+                highlighted: highlighted.contains(index),
             })
             .collect();
         let area = grow(field_rect, 4.0);
@@ -394,6 +428,22 @@ impl Controller {
         let target = self.target();
         state.overlay.pill(field_rect, state.fixes.len(), target);
     }
+}
+
+/// Every fix in the same sentence as `index`, in order. One means the word
+/// card; more means the sentence card.
+fn group(state: &State, index: usize) -> Vec<(usize, Fix)> {
+    let Some(fix) = state.fixes.get(index) else {
+        return Vec::new();
+    };
+    let (start, end) = sentence(&state.text, fix.start);
+    state
+        .fixes
+        .iter()
+        .enumerate()
+        .filter(|(_, f)| f.start >= start && f.end <= end.max(start))
+        .map(|(i, f)| (i, f.clone()))
+        .collect()
 }
 
 fn grow(rect: CGRect, by: f64) -> CGRect {
@@ -445,19 +495,37 @@ fn accept_one(state: &mut State, index: usize) {
         paste::paste(&fix.replacement);
     }
     state.overlay.hide_card();
-    state.overlay.hide_pill();
 }
 
-/// Every fix, back to front so each leaves the offsets of the rest valid. If
-/// the app refuses a direct write, the whole corrected text is pasted over a
-/// select-all instead of a dozen pastes racing the clipboard.
+/// Every fix in the field.
 fn accept_every(state: &mut State, _: &Controller) {
+    let all: Vec<usize> = (0..state.fixes.len()).collect();
+    accept_fixes(state, &all);
+}
+
+/// Several fixes at once, back to front so each write leaves the offsets of
+/// the rest valid. If the app refuses direct writes, the span they cover is
+/// pasted once, corrected, over a selection of the same span - a paste per
+/// fix would race the clipboard, and a select-all would reformat text the
+/// user never asked to touch.
+fn accept_fixes(state: &mut State, indices: &[usize]) {
     let Some(field) = &state.field else {
         return;
     };
-    let fixes = state.fixes.clone();
-    let corrected = apply(&state.text, &fixes);
-    let mut current = state.text.clone();
+    let mut fixes: Vec<Fix> = indices
+        .iter()
+        .filter_map(|i| state.fixes.get(*i).cloned())
+        .collect();
+    fixes.sort_by_key(|f| f.start);
+    let (Some(lo), Some(hi)) = (
+        fixes.iter().map(|f| f.start).min(),
+        fixes.iter().map(|f| f.end).max(),
+    ) else {
+        return;
+    };
+    let text = state.text.clone();
+    let corrected = apply(&text, &fixes);
+    let mut current = text.clone();
     let mut direct = true;
     for fix in fixes.iter().rev() {
         let next = apply(&current, std::slice::from_ref(fix));
@@ -469,12 +537,26 @@ fn accept_every(state: &mut State, _: &Controller) {
         current = next;
     }
     if !direct {
-        let everything = current.encode_utf16().count();
-        if field.select(0, everything) {
-            paste::paste(&corrected);
+        // Every change lies inside [lo, hi), so outside it `current`, `text`
+        // and `corrected` agree and only the span's end moves.
+        let len = |s: &str| s.chars().count() as isize;
+        let current_hi = (hi as isize + len(&current) - len(&text)) as usize;
+        let corrected_hi = (hi as isize + len(&corrected) - len(&text)) as usize;
+        let span = Fix {
+            start: lo,
+            end: current_hi,
+            replacement: String::new(),
+            kind: fixes[0].kind,
+            message: String::new(),
+            source: fixes[0].source,
+        };
+        let (location, length) = span.utf16(&current);
+        let replacement: String = corrected.chars().skip(lo).take(corrected_hi - lo).collect();
+        if field.select(location, length) {
+            paste::paste(&replacement);
         }
     }
-    state.overlay.hide_all();
+    state.overlay.hide_card();
 }
 
 fn refresh_menu(state: &mut State) {

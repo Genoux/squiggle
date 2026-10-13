@@ -7,10 +7,11 @@
 pub mod ai;
 pub mod config;
 pub mod fix;
+pub mod lang;
 pub mod local;
 pub mod router;
 pub mod worker;
 
 pub use config::Config;
-pub use fix::{Fix, Kind, Source, apply, merge};
+pub use fix::{Fix, Kind, Source, apply, merge, rebase, sentence};
 pub use local::Local;

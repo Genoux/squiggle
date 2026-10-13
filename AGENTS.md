@@ -41,6 +41,11 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
   on OpenRouter ($0.10/$0.50 per M at 2026-10-12) and follows "do not change
   the voice" well. Not yet measured against alternatives - do that before
   swapping it.
+- Language is detected per paragraph, English vs French only
+  (`lang.rs`): among all of whatlang's languages a plain ten-word English
+  sentence came back unreliable; between two it is decisive. Harper is
+  English-only and runs on English paragraphs alone - on French it flags
+  every word. The model is told the language by name, as Flow does.
 - Config and dictionary are read per check, as Flow reads its style per
   dictation, so a setting applies on the next pause rather than the next launch.
 - The key never reaches curl's argv; same `-K -` and 0600 body file as Flow.
@@ -52,7 +57,8 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
 
 ## macOS surface
 
-- Polled at 100ms, not driven by `AXObserver`. Notifications are per process
+- Polled at 50ms, not driven by `AXObserver`. 100ms made the card feel
+  sluggish next to Grammarly's, since hover is a poll too. Notifications are per process
   and per element, several Electron apps never send `AXValueChanged`, and
   observers must be re-registered whenever focus moves.
 - Every AX call is IPC into another app; a 150ms messaging timeout keeps a
@@ -72,9 +78,23 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
   fallback loses rich formatting in that field; a known trade-off.
 - Terminals are skipped by bundle id, password fields by role. Both are
   deliberate and both are what Grammarly does.
-- The Accessibility grant is tied to the code signature. Install signs ad hoc,
-  which changes every build, so every update needs the grant again. A stable
-  self-signed identity would fix that; not done yet.
+- The Accessibility grant is tied to the signature's designated requirement.
+  Ad hoc, that requirement is the build's hash, so every install lost the
+  grant. Install now signs with a "Gramly Local Signing" certificate it makes
+  once in the login keychain; the requirement names the certificate and the
+  grant survives rebuilds.
+- Nothing animates. Core Animation's implicit actions drew every new
+  underline sliding in from the panel corner; layer changes go through
+  `overlay::still` with actions disabled, panels have no window animation.
+- Underlines are carried across edits (`fix::rebase`) instead of cleared on
+  every keystroke, which flickered: a fix the edit touched is dropped, the
+  rest shift. Letters typed onto a word's edge count as touching it; a space
+  or punctuation does not.
+- Two cards. One fix in a sentence gets the small one (title, the
+  replacement to click, Dismiss). Two or more get the sentence card with
+  every change inline and "Correct the sentence". Grouping is
+  `fix::sentence`, which splits early on abbreviations - a smaller group,
+  never a wrong one.
 
 ## Repository
 

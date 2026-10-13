@@ -32,6 +32,18 @@ Keep the writer's voice. Do not change tone, slang, casual style, names, \
 meaning, or the language it is written in. Do not suggest synonyms for words \
 that are already right. Text with no mistakes gets an empty list.";
 
+/// The fixed prompt, then the detected language - appended rather than
+/// woven in, so the unchanging part leads every request.
+fn system_prompt(text: &str) -> String {
+    match crate::lang::detect(text).name() {
+        Some(name) => format!(
+            "{SYSTEM}\n\nThis text is in {name}. Correct it as {name}, write every \
+             replacement in {name}, and write each reason in {name}. Never translate it."
+        ),
+        None => SYSTEM.to_string(),
+    }
+}
+
 /// Edits longer than this are rewrites wearing an edit's clothes.
 const LONGEST_EDIT: usize = 80;
 
@@ -80,7 +92,7 @@ pub fn check(key: &str, text: &str) -> Result<Vec<Fix>> {
     if text.trim().is_empty() {
         return Ok(Vec::new());
     }
-    let reply = router::structured(key, SYSTEM, text, &schema(), TIMEOUT)?;
+    let reply = router::structured(key, &system_prompt(text), text, &schema(), TIMEOUT)?;
     let reply: Reply = serde_json::from_value(reply)?;
     Ok(locate(text, reply.edits))
 }
@@ -206,6 +218,18 @@ mod tests {
         let fixed = apply(text, &fixes);
         assert!(fixed.contains("go there"), "{fixed}");
         assert!(fixed.contains("you're free"), "{fixed}");
+    }
+
+    #[test]
+    #[ignore]
+    fn live_model_corrects_french_in_french() {
+        let key = std::env::var("GRAMLY_OPENROUTER_KEY").expect("GRAMLY_OPENROUTER_KEY");
+        let text = "Je suis aller au marché hier et j'ai acheter des pommes.";
+        let fixes = check(&key, text).expect("model call");
+        let fixed = apply(text, &fixes);
+        eprintln!("{fixes:#?}");
+        assert!(fixed.contains("suis allé"), "{fixed}");
+        assert!(fixed.contains("ai acheté"), "{fixed}");
     }
 
     #[test]

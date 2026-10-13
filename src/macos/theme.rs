@@ -30,6 +30,8 @@ pub const TEXT: Rgba = rgb(0.925, 0.929, 0.937);
 pub const MUTED: Rgba = rgb(0.549, 0.565, 0.580);
 /// Flow `ACCENT` #2ED573 - Accept, and nothing else.
 pub const ACCENT: Rgba = rgb(0.180, 0.835, 0.451);
+/// Flow `ON_ACCENT` #14150F - text on the green Accept button.
+pub const ON_ACCENT: Rgba = rgb(0.078, 0.082, 0.059);
 /// Flow `ERR` #D4736B, a touch more saturated so a 2px line still reads on
 /// white documents as well as dark ones.
 pub const MISTAKE: Rgba = rgb(0.890, 0.373, 0.337);
