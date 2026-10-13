@@ -637,12 +637,42 @@ fn build_menu(state: &mut State, controller: &Controller, mtm: MainThreadMarker)
     refresh_menu(state);
 }
 
+/// ⌘V, ⌘C, ⌘X and ⌘A are menu key equivalents, not text-field behaviour: an
+/// app with no Edit menu cannot paste into its own key dialog. Gramly shows
+/// no menu bar, but the menu still has to exist for the shortcuts to route.
+fn edit_menu(mtm: MainThreadMarker) -> Retained<NSMenu> {
+    let main = NSMenu::new(mtm);
+    let edit = NSMenu::initWithTitle(NSMenu::alloc(mtm), &NSString::from_str("Edit"));
+    for (title, action, key) in [
+        ("Cut", sel!(cut:), "x"),
+        ("Copy", sel!(copy:), "c"),
+        ("Paste", sel!(paste:), "v"),
+        ("Select All", sel!(selectAll:), "a"),
+    ] {
+        // No target: the action goes to whatever has focus, the key field.
+        let item = unsafe {
+            NSMenuItem::initWithTitle_action_keyEquivalent(
+                NSMenuItem::alloc(mtm),
+                &NSString::from_str(title),
+                Some(action),
+                &NSString::from_str(key),
+            )
+        };
+        edit.addItem(&item);
+    }
+    let holder = NSMenuItem::new(mtm);
+    holder.setSubmenu(Some(&edit));
+    main.addItem(&holder);
+    main
+}
+
 pub fn run() -> anyhow::Result<()> {
     let mtm = MainThreadMarker::new().ok_or_else(|| anyhow::anyhow!("not on the main thread"))?;
     let app = NSApplication::sharedApplication(mtm);
     // No Dock icon and no menu bar of its own: Gramly lives in the status
     // item and on top of other apps' text.
     app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
+    app.setMainMenu(Some(&edit_menu(mtm)));
 
     // Asks once, the first time; macOS remembers the answer per signed binary.
     let trusted = ax::trusted(true);
