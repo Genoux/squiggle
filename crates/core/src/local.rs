@@ -219,6 +219,18 @@ mod tests {
     }
 
     #[test]
+    fn short_french_slang_is_left_to_the_model() {
+        let mut local = Local::new(Dialect::American);
+        let text = "ERT CEst cool mais jpense pas.";
+        let fixes = local.check(text);
+        assert!(
+            fixes.is_empty(),
+            "{:?}",
+            fixes.iter().map(|f| f.original(text)).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
     fn a_known_word_is_not_a_misspelling() {
         let mut local = Local::new(Dialect::American);
         let text = "Gramly runs on Hyprland.";

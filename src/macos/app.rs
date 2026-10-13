@@ -62,6 +62,9 @@ struct State {
     hovering: Option<(usize, Instant)>,
     left_at: Option<Instant>,
     ai_error: Option<String>,
+    /// The model has answered for the text as it is now. Until then Harper's
+    /// underlines stand in; once it has, its answer is the whole answer.
+    ai_current: bool,
     trusted: bool,
     status: Option<Retained<NSStatusItem>>,
     menu_status: Option<Retained<NSMenuItem>>,
@@ -288,6 +291,7 @@ impl Controller {
             state.ai = rebase(&state.text, &text, &state.ai);
             state.fixes = rebase(&state.text, &text, &state.fixes);
             state.text = text;
+            state.ai_current = false;
             state.changed_at = Instant::now();
             state.submitted = false;
             state.generation += 1;
@@ -308,6 +312,7 @@ impl Controller {
                 }
                 Outcome::Ai { generation, fixes } if generation == state.generation => {
                     state.ai = fixes;
+                    state.ai_current = true;
                     state.ai_error = None;
                     changed = true;
                 }
@@ -464,6 +469,7 @@ fn reset(state: &mut State) {
     state.hovering = None;
     state.left_at = None;
     state.submitted = false;
+    state.ai_current = false;
     state.generation += 1;
     state.overlay.hide_all();
 }
@@ -471,7 +477,16 @@ fn reset(state: &mut State) {
 fn refilter(state: &mut State) {
     let text = &state.text;
     let dismissed = &state.dismissed;
-    state.fixes = merge(state.local.clone(), state.ai.clone())
+    // The model read the sentence; Harper matched patterns. Harper is the
+    // instant first draw and the offline fallback, and on French slang it
+    // offered "Eat" for "ERT" and "ma's" for "mais" - so once the model has
+    // answered for this text, what it did not flag is not flagged.
+    let base = if state.ai_current {
+        state.ai.clone()
+    } else {
+        merge(state.local.clone(), state.ai.clone())
+    };
+    state.fixes = base
         .into_iter()
         .filter(|fix| !dismissed.contains(&(fix.original(text), fix.replacement.clone())))
         .collect();
@@ -776,6 +791,7 @@ pub fn run() -> anyhow::Result<()> {
         hovering: None,
         left_at: None,
         ai_error: None,
+        ai_current: false,
         trusted,
         status: None,
         menu_status: None,

@@ -82,7 +82,9 @@ fn panel(mtm: MainThreadMarker, interactive: bool) -> Retained<NSPanel> {
     panel.setBackgroundColor(Some(&NSColor::clearColor()));
     panel.setHasShadow(interactive);
     panel.setIgnoresMouseEvents(!interactive);
-    panel.setLevel(NSStatusWindowLevel);
+    // The card and pill sit one level above the underlines, so a line from
+    // a field behind never crosses the card.
+    panel.setLevel(NSStatusWindowLevel + interactive as isize);
     panel.setAnimationBehavior(NSWindowAnimationBehavior::None);
     // An accessory app is never active, and a panel that hides on
     // deactivation would therefore never show at all.

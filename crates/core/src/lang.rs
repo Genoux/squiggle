@@ -13,9 +13,7 @@ pub enum Language {
     English,
     French,
     Other(Lang),
-    /// Too short or too mixed to tell. Treated as English for the local pass,
-    /// because a three-word English reply is the common case and Harper on a
-    /// short French phrase costs at most a few underlines.
+    /// Too short or too mixed to tell. Left to the model.
     Unknown,
 }
 
@@ -40,9 +38,12 @@ pub fn detect(text: &str) -> Language {
 }
 
 impl Language {
-    /// Whether Harper's English rules apply.
+    /// Whether Harper's English rules apply: only to text that is clearly
+    /// English. "ERT CEst cool mais jpense pas." is too short to call, and
+    /// treating unknown as English is how Harper got to it; unclear text now
+    /// waits the second for the model instead.
     pub fn local_pass(self) -> bool {
-        matches!(self, Language::English | Language::Unknown)
+        self == Language::English
     }
 
     /// The name the prompt uses, when there is one worth stating.
