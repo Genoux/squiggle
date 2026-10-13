@@ -1,0 +1,7 @@
+[toolchain]
+# Pinned rather than "stable", as in Flow: rustfmt's output shifts between
+# releases, so an unpinned toolchain turns `cargo fmt --check` in CI into a
+# change nobody made. Newer than Flow's 1.89 because harper-core 2.11 does not
+# type-check on 1.89. Bump this line deliberately.
+channel = "1.98.0"
+components = ["rustfmt", "clippy"]

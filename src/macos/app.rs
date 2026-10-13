@@ -1,0 +1,696 @@
+//! The run loop: watch the focused field, check it when typing pauses, draw
+//! what was found, and apply what the user accepts.
+//!
+//! Polled rather than driven by AXObserver notifications. Notifications are
+//! per process and per element, arrive for some apps and not others (several
+//! Electron builds never send `AXValueChanged`), and must be re-registered
+//! every time focus moves; a 100ms poll of one attribute costs well under a
+//! millisecond and behaves the same in every app.
+
+use crate::macos::ax::{self, Field};
+use crate::macos::overlay::{self, Mark, Overlay};
+use crate::macos::paste;
+use gramly_core::worker::{Outcome, Worker};
+use gramly_core::{Config, Fix, apply, config, merge};
+use objc2::rc::Retained;
+use objc2::runtime::{AnyObject, NSObject, NSObjectProtocol};
+use objc2::{
+    ClassType, DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel,
+};
+use objc2_app_kit::{
+    NSAlert, NSAlertFirstButtonReturn, NSApplication, NSApplicationActivationPolicy, NSEvent,
+    NSImage, NSMenu, NSMenuItem, NSSecureTextField, NSStatusBar, NSStatusItem,
+    NSVariableStatusItemLength, NSWorkspace,
+};
+use objc2_core_foundation::{CGPoint, CGRect, CGSize};
+use objc2_foundation::{NSString, NSTimer, NSURL};
+use std::cell::RefCell;
+use std::collections::HashSet;
+use std::time::{Duration, Instant};
+
+const TICK: f64 = 0.1;
+/// Typing must pause this long before a check is asked for. Shorter and the
+/// model is asked about half-typed words; longer and the underlines feel late.
+const PAUSE: Duration = Duration::from_millis(450);
+/// Hovering a word this long opens its card: long enough that sweeping the
+/// pointer across a paragraph does not flash cards open.
+const HOVER: Duration = Duration::from_millis(150);
+/// Leaving word and card this long closes the card, so crossing the gap
+/// between them does not.
+const LEAVE: Duration = Duration::from_millis(300);
+const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+struct State {
+    worker: Worker,
+    overlay: Overlay,
+    field: Option<Field>,
+    text: String,
+    changed_at: Instant,
+    generation: u64,
+    submitted: bool,
+    local: Vec<Fix>,
+    ai: Vec<Fix>,
+    fixes: Vec<Fix>,
+    /// `(original, replacement)` pairs dismissed in this field. Cleared when
+    /// focus moves, as Grammarly's are.
+    dismissed: HashSet<(String, String)>,
+    /// Each drawn fix's word rectangle, Cocoa coordinates, by index into `fixes`.
+    words: Vec<(usize, CGRect)>,
+    hovering: Option<(usize, Instant)>,
+    left_at: Option<Instant>,
+    ai_error: Option<String>,
+    trusted: bool,
+    status: Option<Retained<NSStatusItem>>,
+    menu_status: Option<Retained<NSMenuItem>>,
+    menu_enabled: Option<Retained<NSMenuItem>>,
+    menu_ai: Option<Retained<NSMenuItem>>,
+    menu_access: Option<Retained<NSMenuItem>>,
+}
+
+pub struct Ivars {
+    state: RefCell<Option<State>>,
+}
+
+define_class!(
+    #[unsafe(super(NSObject))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "GramlyController"]
+    #[ivars = Ivars]
+    pub struct Controller;
+
+    unsafe impl NSObjectProtocol for Controller {}
+
+    impl Controller {
+        #[unsafe(method(tick:))]
+        fn tick(&self, _timer: &AnyObject) {
+            self.with_state(|state, me| me.on_tick(state));
+        }
+
+        #[unsafe(method(accept:))]
+        fn accept(&self, sender: &AnyObject) {
+            let index = tag(sender);
+            self.with_state(|state, _| accept_one(state, index));
+        }
+
+        #[unsafe(method(dismiss:))]
+        fn dismiss(&self, sender: &AnyObject) {
+            let index = tag(sender);
+            self.with_state(|state, _| {
+                if let Some(fix) = state.fixes.get(index) {
+                    let original = fix.original(&state.text);
+                    state.dismissed.insert((original, fix.replacement.clone()));
+                }
+                state.overlay.hide_card();
+                refilter(state);
+            });
+        }
+
+        #[unsafe(method(learn:))]
+        fn learn(&self, sender: &AnyObject) {
+            let index = tag(sender);
+            self.with_state(|state, _| {
+                if let Some(fix) = state.fixes.get(index) {
+                    let word = fix.original(&state.text);
+                    if let Err(err) = config::add_to_dictionary(&word) {
+                        eprintln!("gramly: adding {word:?} to the dictionary: {err:#}");
+                    }
+                    state.dismissed.insert((word, fix.replacement.clone()));
+                }
+                state.overlay.hide_card();
+                refilter(state);
+                // Re-check so the other places that word was flagged clear too.
+                state.submitted = false;
+                state.changed_at = Instant::now() - PAUSE;
+            });
+        }
+
+        #[unsafe(method(acceptAll:))]
+        fn accept_all(&self, _sender: &AnyObject) {
+            self.with_state(accept_every);
+        }
+
+        #[unsafe(method(toggleEnabled:))]
+        fn toggle_enabled(&self, _sender: &AnyObject) {
+            update_config(|c| c.enabled = !c.enabled);
+            self.with_state(|state, _| {
+                reset(state);
+                refresh_menu(state);
+            });
+        }
+
+        #[unsafe(method(toggleAi:))]
+        fn toggle_ai(&self, _sender: &AnyObject) {
+            update_config(|c| c.ai = !c.ai);
+            self.with_state(|state, _| {
+                state.ai_error = None;
+                reset(state);
+                refresh_menu(state);
+            });
+        }
+
+        #[unsafe(method(setKey:))]
+        fn set_key(&self, _sender: &AnyObject) {
+            ask_for_key(self.mtm());
+            self.with_state(|state, _| {
+                state.ai_error = None;
+                reset(state);
+                refresh_menu(state);
+            });
+        }
+
+        #[unsafe(method(openDictionary:))]
+        fn open_dictionary(&self, _sender: &AnyObject) {
+            let path = config::dictionary_path();
+            if !path.exists() {
+                if let Some(parent) = path.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                let _ = std::fs::write(&path, "# One word per line. Gramly will never flag these.\n");
+            }
+            let url = NSURL::fileURLWithPath(&NSString::from_str(&path.to_string_lossy()));
+            NSWorkspace::sharedWorkspace().openURL(&url);
+        }
+
+        #[unsafe(method(grantAccess:))]
+        fn grant_access(&self, _sender: &AnyObject) {
+            ax::trusted(true);
+            let link = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility";
+            if let Some(url) = NSURL::URLWithString(&NSString::from_str(link)) {
+                NSWorkspace::sharedWorkspace().openURL(&url);
+            }
+        }
+
+        #[unsafe(method(quit:))]
+        fn quit(&self, _sender: &AnyObject) {
+            NSApplication::sharedApplication(self.mtm()).terminate(None);
+        }
+    }
+);
+
+fn tag(sender: &AnyObject) -> usize {
+    let tag: isize = unsafe { msg_send![sender, tag] };
+    tag.max(0) as usize
+}
+
+fn update_config(change: impl FnOnce(&mut Config)) {
+    let mut config = Config::load().unwrap_or_default();
+    change(&mut config);
+    if let Err(err) = config.save() {
+        eprintln!("gramly: saving settings: {err:#}");
+    }
+}
+
+impl Controller {
+    fn new(mtm: MainThreadMarker) -> Retained<Self> {
+        let this = Self::alloc(mtm).set_ivars(Ivars {
+            state: RefCell::new(None),
+        });
+        unsafe { msg_send![super(this), init] }
+    }
+
+    fn with_state(&self, f: impl FnOnce(&mut State, &Self)) {
+        // A re-entrant call (AppKit calling back into an action while another
+        // holds the state) is dropped rather than panicking the app; the next
+        // tick sees the same world again.
+        let Ok(mut guard) = self.ivars().state.try_borrow_mut() else {
+            return;
+        };
+        if let Some(state) = guard.as_mut() {
+            f(state, self);
+        }
+    }
+
+    fn target(&self) -> &AnyObject {
+        let object: &NSObject = self.as_super();
+        object
+    }
+
+    fn on_tick(&self, state: &mut State) {
+        let mtm = self.mtm();
+        let config = Config::load().unwrap_or_default();
+        let trusted = ax::trusted(false);
+        if trusted != state.trusted {
+            state.trusted = trusted;
+            refresh_menu(state);
+        }
+        if !config.enabled || !trusted {
+            reset(state);
+            return;
+        }
+
+        // Focus.
+        let field = ax::focused_field();
+        let same = matches!((&field, &state.field), (Some(a), Some(b)) if a == b);
+        if !same {
+            reset(state);
+            state.field = field;
+        }
+        let Some(field) = &state.field else {
+            return;
+        };
+
+        // Text.
+        let Some(text) = field.value() else {
+            state.overlay.hide_all();
+            return;
+        };
+        if text != state.text {
+            state.text = text;
+            state.changed_at = Instant::now();
+            state.submitted = false;
+            state.generation += 1;
+            state.local.clear();
+            state.ai.clear();
+            state.fixes.clear();
+            state.words.clear();
+            state.overlay.hide_all();
+        }
+        if !state.submitted && state.changed_at.elapsed() >= PAUSE {
+            state.submitted = true;
+            state.worker.submit(state.generation, state.text.clone());
+        }
+
+        // Answers.
+        let mut changed = false;
+        while let Some(outcome) = state.worker.try_recv() {
+            match outcome {
+                Outcome::Local { generation, fixes } if generation == state.generation => {
+                    state.local = fixes;
+                    changed = true;
+                }
+                Outcome::Ai { generation, fixes } if generation == state.generation => {
+                    state.ai = fixes;
+                    state.ai_error = None;
+                    changed = true;
+                }
+                Outcome::AiFailed { reason, .. } if state.ai_error.as_deref() != Some(&reason) => {
+                    eprintln!("gramly: model check failed: {reason}");
+                    state.ai_error = Some(reason);
+                    refresh_menu(state);
+                }
+                _ => {}
+            }
+        }
+        if changed {
+            refilter(state);
+        }
+        if state.fixes.is_empty() {
+            state.overlay.hide_all();
+            return;
+        }
+
+        // Geometry, every tick: the field scrolls and its window moves without
+        // the text changing.
+        let Some(frame) = state.field.as_ref().and_then(|f| f.visible_frame()) else {
+            state.overlay.hide_all();
+            return;
+        };
+        let field_rect = overlay::to_cocoa(frame, mtm);
+        state.words.clear();
+        for (index, fix) in state.fixes.iter().enumerate() {
+            let (location, length) = fix.utf16(&state.text);
+            // An insertion has no width of its own; underline the character
+            // it follows so there is something to hover.
+            let (location, length) = if length == 0 {
+                (location.saturating_sub(1), 1)
+            } else {
+                (location, length)
+            };
+            let Some(bounds) = state
+                .field
+                .as_ref()
+                .and_then(|f| f.bounds(location, length))
+            else {
+                continue;
+            };
+            let word = overlay::to_cocoa(bounds, mtm);
+            // Scrolled out of the field's visible area: not drawn.
+            let visible = word.origin.y >= field_rect.origin.y - 2.0
+                && word.origin.y + word.size.height
+                    <= field_rect.origin.y + field_rect.size.height + 2.0;
+            if visible {
+                state.words.push((index, word));
+            }
+        }
+
+        // Hover.
+        let mouse = NSEvent::mouseLocation();
+        let over_word = state
+            .words
+            .iter()
+            .find(|(_, rect)| overlay::contains(grow(*rect, 2.0), mouse))
+            .map(|(index, _)| *index);
+        let over_card = state
+            .overlay
+            .card_frame()
+            .is_some_and(|f| overlay::contains(f, mouse));
+        match over_word {
+            Some(index) => {
+                state.left_at = None;
+                let since = match state.hovering {
+                    Some((current, since)) if current == index => since,
+                    _ => {
+                        let now = Instant::now();
+                        state.hovering = Some((index, now));
+                        now
+                    }
+                };
+                if since.elapsed() >= HOVER
+                    && let Some((_, word)) = state.words.iter().find(|(i, _)| *i == index)
+                {
+                    let fix = state.fixes[index].clone();
+                    let original = fix.original(&state.text);
+                    state
+                        .overlay
+                        .show_card(index, &fix, &original, *word, self.target());
+                }
+            }
+            None if over_card => state.left_at = None,
+            None => {
+                state.hovering = None;
+                if state.overlay.card_for.is_some() {
+                    let left = *state.left_at.get_or_insert_with(Instant::now);
+                    if left.elapsed() >= LEAVE {
+                        state.overlay.hide_card();
+                        state.left_at = None;
+                    }
+                }
+            }
+        }
+
+        // Draw.
+        let highlighted = state.overlay.card_for;
+        let marks: Vec<Mark> = state
+            .words
+            .iter()
+            .map(|(index, rect)| Mark {
+                rect: *rect,
+                kind: state.fixes[*index].kind,
+                highlighted: highlighted == Some(*index),
+            })
+            .collect();
+        let area = grow(field_rect, 4.0);
+        state.overlay.marks(area, marks);
+        let target = self.target();
+        state.overlay.pill(field_rect, state.fixes.len(), target);
+    }
+}
+
+fn grow(rect: CGRect, by: f64) -> CGRect {
+    CGRect::new(
+        CGPoint::new(rect.origin.x - by, rect.origin.y - by),
+        CGSize::new(rect.size.width + by * 2.0, rect.size.height + by * 2.0),
+    )
+}
+
+fn reset(state: &mut State) {
+    state.field = None;
+    state.text.clear();
+    state.local.clear();
+    state.ai.clear();
+    state.fixes.clear();
+    state.words.clear();
+    state.dismissed.clear();
+    state.hovering = None;
+    state.left_at = None;
+    state.submitted = false;
+    state.generation += 1;
+    state.overlay.hide_all();
+}
+
+fn refilter(state: &mut State) {
+    let text = &state.text;
+    let dismissed = &state.dismissed;
+    state.fixes = merge(state.local.clone(), state.ai.clone())
+        .into_iter()
+        .filter(|fix| !dismissed.contains(&(fix.original(text), fix.replacement.clone())))
+        .collect();
+    state.overlay.hide_card();
+}
+
+/// One fix, through Accessibility if the app honours it and as a paste over a
+/// selection if it does not.
+fn accept_one(state: &mut State, index: usize) {
+    let Some(fix) = state.fixes.get(index).cloned() else {
+        return;
+    };
+    let Some(field) = &state.field else {
+        return;
+    };
+    let expected = apply(&state.text, std::slice::from_ref(&fix));
+    let (location, length) = fix.utf16(&state.text);
+    if !field.replace(location, length, &fix.replacement, &expected)
+        && field.select(location, length)
+    {
+        paste::paste(&fix.replacement);
+    }
+    state.overlay.hide_card();
+    state.overlay.hide_pill();
+}
+
+/// Every fix, back to front so each leaves the offsets of the rest valid. If
+/// the app refuses a direct write, the whole corrected text is pasted over a
+/// select-all instead of a dozen pastes racing the clipboard.
+fn accept_every(state: &mut State, _: &Controller) {
+    let Some(field) = &state.field else {
+        return;
+    };
+    let fixes = state.fixes.clone();
+    let corrected = apply(&state.text, &fixes);
+    let mut current = state.text.clone();
+    let mut direct = true;
+    for fix in fixes.iter().rev() {
+        let next = apply(&current, std::slice::from_ref(fix));
+        let (location, length) = fix.utf16(&current);
+        if !field.replace(location, length, &fix.replacement, &next) {
+            direct = false;
+            break;
+        }
+        current = next;
+    }
+    if !direct {
+        let everything = current.encode_utf16().count();
+        if field.select(0, everything) {
+            paste::paste(&corrected);
+        }
+    }
+    state.overlay.hide_all();
+}
+
+fn refresh_menu(state: &mut State) {
+    let config = Config::load().unwrap_or_default();
+    let status = if !state.trusted {
+        "Needs Accessibility access".to_string()
+    } else if !config.enabled {
+        "Paused".to_string()
+    } else if !config.ai || config.openrouter_key.is_none() {
+        "Checking on this Mac only".to_string()
+    } else if let Some(error) = &state.ai_error {
+        format!("Model unavailable: {}", truncate(error, 48))
+    } else {
+        "Checking with Claude Haiku 5.5".to_string()
+    };
+    if let Some(item) = &state.menu_status {
+        item.setTitle(&NSString::from_str(&status));
+    }
+    if let Some(item) = &state.menu_enabled {
+        item.setState(config.enabled as isize);
+    }
+    if let Some(item) = &state.menu_ai {
+        item.setState((config.ai && config.openrouter_key.is_some()) as isize);
+    }
+    if let Some(item) = &state.menu_access {
+        item.setHidden(state.trusted);
+    }
+}
+
+fn truncate(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_string();
+    }
+    let cut: String = text.chars().take(max - 1).collect();
+    format!("{cut}…")
+}
+
+fn ask_for_key(mtm: MainThreadMarker) {
+    let app = NSApplication::sharedApplication(mtm);
+    #[allow(deprecated)]
+    app.activateIgnoringOtherApps(true);
+    let alert = NSAlert::new(mtm);
+    alert.setMessageText(&NSString::from_str("OpenRouter key"));
+    alert.setInformativeText(&NSString::from_str(
+        "Paste a key from openrouter.ai/keys. It is stored in ~/.config/gramly/config.toml, readable only by you. Leave it empty to check on this Mac only.",
+    ));
+    alert.addButtonWithTitle(&NSString::from_str("Save"));
+    alert.addButtonWithTitle(&NSString::from_str("Cancel"));
+    let input = NSSecureTextField::initWithFrame(
+        NSSecureTextField::alloc(mtm),
+        CGRect::new(CGPoint::new(0.0, 0.0), CGSize::new(300.0, 24.0)),
+    );
+    let current = Config::load().unwrap_or_default();
+    if let Some(key) = &current.openrouter_key {
+        input.setStringValue(&NSString::from_str(key));
+    }
+    alert.setAccessoryView(Some(&input));
+    alert.window().setInitialFirstResponder(Some(&input));
+    if alert.runModal() == NSAlertFirstButtonReturn {
+        let key = input.stringValue().to_string().trim().to_string();
+        if !key.is_empty() && !gramly_core::router::valid_key(&key) {
+            let warning = NSAlert::new(mtm);
+            warning.setMessageText(&NSString::from_str(
+                "That does not look like an OpenRouter key",
+            ));
+            warning.runModal();
+            return;
+        }
+        update_config(|c| c.openrouter_key = Some(key).filter(|k| !k.is_empty()));
+    }
+}
+
+fn menu_item(
+    title: &str,
+    action: Option<objc2::runtime::Sel>,
+    key: &str,
+    target: &AnyObject,
+    mtm: MainThreadMarker,
+) -> Retained<NSMenuItem> {
+    let item = unsafe {
+        NSMenuItem::initWithTitle_action_keyEquivalent(
+            NSMenuItem::alloc(mtm),
+            &NSString::from_str(title),
+            action,
+            &NSString::from_str(key),
+        )
+    };
+    if action.is_some() {
+        unsafe { item.setTarget(Some(target)) };
+    } else {
+        item.setEnabled(false);
+    }
+    item
+}
+
+fn build_menu(state: &mut State, controller: &Controller, mtm: MainThreadMarker) {
+    let target = controller.target();
+    let bar = NSStatusBar::systemStatusBar();
+    let item = bar.statusItemWithLength(NSVariableStatusItemLength);
+    if let Some(button) = item.button(mtm) {
+        let image = NSImage::imageWithSystemSymbolName_accessibilityDescription(
+            &NSString::from_str("text.badge.checkmark"),
+            Some(&NSString::from_str("Gramly")),
+        );
+        match image {
+            Some(image) => {
+                image.setTemplate(true);
+                button.setImage(Some(&image));
+            }
+            None => button.setTitle(&NSString::from_str("G")),
+        }
+    }
+
+    let menu = NSMenu::new(mtm);
+    menu.setAutoenablesItems(false);
+    let status = menu_item("Starting…", None, "", target, mtm);
+    let enabled = menu_item(
+        "Check as I type",
+        Some(sel!(toggleEnabled:)),
+        "",
+        target,
+        mtm,
+    );
+    let ai = menu_item("AI suggestions", Some(sel!(toggleAi:)), "", target, mtm);
+    let key = menu_item("OpenRouter key…", Some(sel!(setKey:)), "", target, mtm);
+    let dictionary = menu_item(
+        "Personal dictionary…",
+        Some(sel!(openDictionary:)),
+        "",
+        target,
+        mtm,
+    );
+    let access = menu_item(
+        "Grant Accessibility access…",
+        Some(sel!(grantAccess:)),
+        "",
+        target,
+        mtm,
+    );
+    let about = menu_item(&format!("Gramly {VERSION}"), None, "", target, mtm);
+    let quit = menu_item("Quit Gramly", Some(sel!(quit:)), "q", target, mtm);
+
+    menu.addItem(&status);
+    menu.addItem(&access);
+    menu.addItem(&NSMenuItem::separatorItem(mtm));
+    menu.addItem(&enabled);
+    menu.addItem(&ai);
+    menu.addItem(&key);
+    menu.addItem(&dictionary);
+    menu.addItem(&NSMenuItem::separatorItem(mtm));
+    menu.addItem(&about);
+    menu.addItem(&quit);
+    item.setMenu(Some(&menu));
+
+    state.status = Some(item);
+    state.menu_status = Some(status);
+    state.menu_enabled = Some(enabled);
+    state.menu_ai = Some(ai);
+    state.menu_access = Some(access);
+    refresh_menu(state);
+}
+
+pub fn run() -> anyhow::Result<()> {
+    let mtm = MainThreadMarker::new().ok_or_else(|| anyhow::anyhow!("not on the main thread"))?;
+    let app = NSApplication::sharedApplication(mtm);
+    // No Dock icon and no menu bar of its own: Gramly lives in the status
+    // item and on top of other apps' text.
+    app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
+
+    // Asks once, the first time; macOS remembers the answer per signed binary.
+    let trusted = ax::trusted(true);
+
+    let controller = Controller::new(mtm);
+    let mut state = State {
+        worker: Worker::spawn(),
+        overlay: Overlay::new(mtm),
+        field: None,
+        text: String::new(),
+        changed_at: Instant::now(),
+        generation: 0,
+        submitted: false,
+        local: Vec::new(),
+        ai: Vec::new(),
+        fixes: Vec::new(),
+        dismissed: HashSet::new(),
+        words: Vec::new(),
+        hovering: None,
+        left_at: None,
+        ai_error: None,
+        trusted,
+        status: None,
+        menu_status: None,
+        menu_enabled: None,
+        menu_ai: None,
+        menu_access: None,
+    };
+    build_menu(&mut state, &controller, mtm);
+    *controller.ivars().state.borrow_mut() = Some(state);
+
+    let _timer = unsafe {
+        NSTimer::scheduledTimerWithTimeInterval_target_selector_userInfo_repeats(
+            TICK,
+            controller.target(),
+            sel!(tick:),
+            None,
+            true,
+        )
+    };
+    eprintln!(
+        "gramly {VERSION}: ready{}",
+        if trusted {
+            ""
+        } else {
+            " (waiting for Accessibility access)"
+        }
+    );
+    app.run();
+    Ok(())
+}

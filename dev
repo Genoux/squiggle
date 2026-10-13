@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+#
+# Run Gramly from this checkout and restart it every time a file is saved.
+#
+# Launched from your terminal, so it borrows the terminal's Accessibility
+# grant instead of needing a fresh one per build - the reason this exists
+# rather than reinstalling after every change.
+#
+# The installed copy is stopped while this runs and started again on the way
+# out: two Gramlys draw two sets of underlines.
+#
+#   ./dev            watch and restart
+#   ./dev --once     run once
+set -uo pipefail
+
+repo="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+label="dev.genoux.gramly"
+agent="$HOME/Library/LaunchAgents/$label.plist"
+
+watch=1
+[ "${1-}" = "--once" ] && watch=0
+
+if [ -f "$agent" ]; then
+  launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || true
+  trap 'launchctl bootstrap "gui/$(id -u)" "$agent" 2>/dev/null; kill $pid 2>/dev/null' EXIT
+else
+  trap 'kill $pid 2>/dev/null' EXIT
+fi
+
+stamp() { find "$repo/src" "$repo/crates/core/src" "$repo/Cargo.toml" "$repo/crates/core/Cargo.toml" -type f -newer "$1" 2>/dev/null | head -1; }
+
+pid=0
+while true; do
+  if cargo build --manifest-path "$repo/Cargo.toml"; then
+    target="$(cargo metadata --format-version 1 --no-deps --manifest-path "$repo/Cargo.toml" \
+      | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')"
+    "$target/debug/gramly" &
+    pid=$!
+  fi
+  [ $watch = 0 ] && { wait $pid; exit; }
+  marker="$(mktemp)"
+  while [ -z "$(stamp "$marker")" ]; do sleep 1; done
+  rm -f "$marker"
+  kill $pid 2>/dev/null; wait $pid 2>/dev/null
+done

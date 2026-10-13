@@ -1,0 +1,93 @@
+# Tag-driven, as in Flow: push vX.Y.Z and this builds, tests and drafts a
+# release. Publishing the draft is a decision for whoever ran the build.
+
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  macos:
+    runs-on: macos-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: build-macos
+          save-if: false
+
+      # The app and the engine are versioned together and ship as one
+      # binary; a release whose manifests disagree reports a version nobody
+      # built.
+      - name: Version matches the tag
+        run: |
+          expected="${GITHUB_REF_NAME#v}"
+          for manifest in Cargo.toml crates/core/Cargo.toml; do
+            found=$(sed -n 's/^version = "\(.*\)"/\1/p' "$manifest" | head -1)
+            if [ "$found" != "$expected" ]; then
+              echo "$manifest is $found, tag is $expected" >&2
+              exit 1
+            fi
+          done
+
+      - name: Channel matches the tag
+        run: |
+          channel=$(cat packaging/channel)
+          case "$GITHUB_REF_NAME:$channel" in
+            v*-experimental.*:experimental) ;;
+            v*-*:*) exit 1 ;;
+            v*:stable) ;;
+            *) exit 1 ;;
+          esac
+
+      # A tag can point at a commit CI never saw. Building an untested binary
+      # is cheap; shipping one is not.
+      - name: Test
+        run: cargo test --release --workspace
+
+      - name: Build
+        run: cargo build --release
+
+      # Laid out so packaging/install.sh, unpacked as-is, finds bin/gramly and
+      # skips the build.
+      - name: Package
+        run: |
+          name="gramly-${GITHUB_REF_NAME}-aarch64-macos"
+          mkdir -p "$name/bin"
+          cp target/release/gramly "$name/bin/"
+          cp -r packaging "$name/"
+          cp README.md TROUBLESHOOTING.md LICENSE "$name/"
+          tar czf "$name.tar.gz" "$name"
+          shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256"
+
+      - name: Draft the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          case "$GITHUB_REF_NAME" in
+            *-*) prerelease=--prerelease ;;
+            *) prerelease= ;;
+          esac
+          # `gh release create` on a tag that already has a release makes a
+          # second, untagged draft instead of failing. Flow has the orphan to
+          # prove it. Refuse instead.
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "$GITHUB_REF_NAME already has a release - delete it, or tag a new version" >&2
+            exit 1
+          fi
+          gh release create "$GITHUB_REF_NAME" \
+            --draft \
+            $prerelease \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes \
+            gramly-*.tar.gz gramly-*.tar.gz.sha256

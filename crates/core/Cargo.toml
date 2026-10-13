@@ -1,0 +1,12 @@
+[package]
+name = "gramly-core"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[dependencies]
+anyhow = "1.0.104"
+harper-core = "2.11.0"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
