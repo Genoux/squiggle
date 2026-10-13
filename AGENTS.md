@@ -79,6 +79,19 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
 - Panels are `NonactivatingPanel`, `hidesOnDeactivate = false`. Clicking
   Accept must not steal focus from the field being corrected, and an accessory
   app is never active, so a panel that hides on deactivation never shows.
+- Hover is drunk-proof by design. The card, its word and the band between
+  them are one corridor (`in_corridor`): inside it nothing closes and no
+  word under the card can take the hover. Outside it the card waits 320ms.
+  An 8pt gap with a 180ms close made the card vanish on any slow crossing.
+- The card follows its fix when the list is rebuilt (`refilter`): same fix,
+  untouched; better replacement, redrawn in place on the next tick; gone,
+  closed. Closing on every rebuild made a card vanish a second after it
+  opened, when the model's answer arrived. Actions apply the fix the card
+  shows (`showing`), not the index the button was drawn with.
+- Every app is sent `AXManualAccessibility = true` once when it first comes
+  forward (`ax::wake`). Electron and Chromium build no accessibility tree
+  without it, which is how Grammarly works in a Claude or Slack text box
+  where Gramly showed nothing.
 - The underline panel ignores the mouse, so clicks reach the text. Hover is
   detected by polling the pointer position against the word rectangles.
 - Writing a fix: select the range, set `AXSelectedText`, then **read the value

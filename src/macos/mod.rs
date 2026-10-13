@@ -33,6 +33,11 @@ pub fn doctor() -> anyhow::Result<()> {
     );
     println!("\nclick into a text field; looking in 3 seconds...");
     std::thread::sleep(std::time::Duration::from_secs(3));
+    if let Some(pid) = ax::frontmost_pid() {
+        ax::wake(pid);
+        // Electron builds its tree on the request; give it a moment.
+        std::thread::sleep(std::time::Duration::from_millis(400));
+    }
     match ax::explain_focus() {
         Err(reason) => println!("focused field    none: {reason}"),
         Ok(field) => {

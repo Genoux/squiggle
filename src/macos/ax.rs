@@ -112,6 +112,25 @@ fn bundle_id(pid: i32) -> String {
         .unwrap_or_default()
 }
 
+pub fn frontmost_pid() -> Option<i32> {
+    objc2_app_kit::NSWorkspace::sharedWorkspace()
+        .frontmostApplication()
+        .map(|app| app.processIdentifier())
+}
+
+/// Asks an app to expose its text. Electron apps (Slack, Discord, VS Code,
+/// Claude) and Chromium build no accessibility tree until an assistive app
+/// sets `AXManualAccessibility` on them - which is what Grammarly does, and
+/// why it showed in a Claude chat box where Gramly did not. Apps that do not
+/// know the attribute ignore it.
+pub fn wake(pid: i32) {
+    let app = unsafe { AXUIElement::new_application(pid) };
+    unsafe { app.set_messaging_timeout(MESSAGING_TIMEOUT) };
+    let name = CFString::from_static_str("AXManualAccessibility");
+    let yes: &CFBoolean = CFBoolean::new(true);
+    unsafe { app.set_attribute_value(&name, yes) };
+}
+
 /// The text field that has keyboard focus, if it is one Gramly should read.
 pub fn focused_field() -> Option<Field> {
     explain_focus().ok()

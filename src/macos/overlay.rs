@@ -37,6 +37,8 @@ pub struct Mark {
     pub rect: CGRect,
     pub kind: Kind,
     pub highlighted: bool,
+    /// Just accepted: a green glow and no underline.
+    pub flash: bool,
 }
 
 /// Accessibility reports rectangles from the top-left of the primary display
@@ -208,7 +210,11 @@ impl Overlay {
             for mark in &marks {
                 let x = mark.rect.origin.x - area.origin.x;
                 let y = mark.rect.origin.y - area.origin.y;
-                let color = theme::kind(mark.kind);
+                let color = if mark.flash {
+                    theme::ACCENT
+                } else {
+                    theme::kind(mark.kind)
+                };
                 if mark.highlighted {
                     let fill = CALayer::new();
                     fill.setFrame(CGRect::new(
@@ -218,6 +224,9 @@ impl Overlay {
                     fill.setBackgroundColor(Some(&theme::cg(theme::Rgba { a: 0.2, ..color })));
                     fill.setCornerRadius(3.0);
                     root.addSublayer(&fill);
+                }
+                if mark.flash {
+                    continue;
                 }
                 let line = CALayer::new();
                 line.setFrame(CGRect::new(
@@ -274,7 +283,9 @@ impl Overlay {
         let size = view.frame().size;
         self.card.setContentView(Some(&view));
 
-        let gap = 8.0;
+        // Close under the word: the less there is to cross, the less there is
+        // to fall into.
+        let gap = 4.0;
         let mut origin = CGPoint::new(word.origin.x - 12.0, word.origin.y - gap - size.height);
         if origin.y < 0.0 {
             origin.y = word.origin.y + word.size.height + gap;

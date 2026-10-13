@@ -38,9 +38,13 @@ const PAUSE: Duration = Duration::from_millis(250);
 /// Hovering a word this long opens its card - just enough that sweeping the
 /// pointer across a paragraph does not flash cards open.
 const HOVER: Duration = Duration::from_millis(40);
-/// Leaving word and card this long closes the card, so crossing the gap
-/// between them does not.
-const LEAVE: Duration = Duration::from_millis(180);
+/// Leaving the card's corridor (see `in_corridor`) for this long closes it.
+/// Generous on purpose: a card that vanishes on a wobble is the one thing
+/// that makes the whole app feel broken, and one that lingers a beat costs
+/// nothing.
+const LEAVE: Duration = Duration::from_millis(320);
+/// How long an accepted word glows green.
+const FLASH: Duration = Duration::from_millis(380);
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 struct State {
@@ -61,6 +65,17 @@ struct State {
     words: Vec<(usize, CGRect)>,
     hovering: Option<(usize, Instant)>,
     left_at: Option<Instant>,
+    /// The open card's fix and the word it hangs from. Kept so the card
+    /// survives the fix list being rebuilt under it (the model's answer
+    /// arriving), and so the corridor knows where the word is.
+    card_fix: Option<Fix>,
+    card_word: Option<CGRect>,
+    /// Words just accepted, glowing green until the instant passes.
+    flashing: Option<(Vec<CGRect>, Instant)>,
+    /// The open card's fix changed under it; redraw it at this word.
+    card_stale: Option<CGRect>,
+    /// Apps already asked to expose their text (see `ax::wake`).
+    woken: HashSet<i32>,
     ai_error: Option<String>,
     /// The model has answered for the text as it is now. Until then Harper's
     /// underlines stand in; once it has, its answer is the whole answer.
@@ -94,14 +109,19 @@ define_class!(
 
         #[unsafe(method(accept:))]
         fn accept(&self, sender: &AnyObject) {
-            let index = tag(sender);
-            self.with_state(|state, _| accept_one(state, index));
+            let tagged = tag(sender);
+            self.with_state(|state, _| {
+                let index = showing(state, tagged);
+                flash(state, &[index]);
+                accept_one(state, index);
+            });
         }
 
         #[unsafe(method(dismiss:))]
         fn dismiss(&self, sender: &AnyObject) {
-            let index = tag(sender);
+            let tagged = tag(sender);
             self.with_state(|state, _| {
+                let index = showing(state, tagged);
                 if let Some(fix) = state.fixes.get(index) {
                     let original = fix.original(&state.text);
                     state.dismissed.insert((original, fix.replacement.clone()));
@@ -113,8 +133,9 @@ define_class!(
 
         #[unsafe(method(learn:))]
         fn learn(&self, sender: &AnyObject) {
-            let index = tag(sender);
+            let tagged = tag(sender);
             self.with_state(|state, _| {
+                let index = showing(state, tagged);
                 if let Some(fix) = state.fixes.get(index) {
                     let word = fix.original(&state.text);
                     if let Err(err) = config::add_to_dictionary(&word) {
@@ -132,18 +153,21 @@ define_class!(
 
         #[unsafe(method(acceptSentence:))]
         fn accept_sentence(&self, sender: &AnyObject) {
-            let index = tag(sender);
+            let tagged = tag(sender);
             self.with_state(|state, _| {
+                let index = showing(state, tagged);
                 let indices: Vec<usize> =
                     group(state, index).into_iter().map(|(i, _)| i).collect();
+                flash(state, &indices);
                 accept_fixes(state, &indices);
             });
         }
 
         #[unsafe(method(dismissSentence:))]
         fn dismiss_sentence(&self, sender: &AnyObject) {
-            let index = tag(sender);
+            let tagged = tag(sender);
             self.with_state(|state, _| {
+                let index = showing(state, tagged);
                 for (_, fix) in group(state, index) {
                     let original = fix.original(&state.text);
                     state.dismissed.insert((original, fix.replacement.clone()));
@@ -267,6 +291,14 @@ impl Controller {
             return;
         }
 
+        // Chromium and Electron build their accessibility tree only for an
+        // app that asks; ask each app once, when it first comes forward.
+        if let Some(pid) = ax::frontmost_pid()
+            && state.woken.insert(pid)
+        {
+            ax::wake(pid);
+        }
+
         // Focus.
         let field = ax::focused_field();
         let same = matches!((&field, &state.field), (Some(a), Some(b)) if a == b);
@@ -367,46 +399,50 @@ impl Controller {
         }
 
         // Hover.
+        if let (Some(word), Some(index)) = (state.card_stale.take(), state.overlay.card_for) {
+            state.overlay.hide_card();
+            open_card(state, index, word, self);
+        }
         let mouse = NSEvent::mouseLocation();
-        let over_word = state
-            .words
-            .iter()
-            .find(|(_, rect)| overlay::contains(grow(*rect, 2.0), mouse))
-            .map(|(index, _)| *index);
         state.overlay.hover(mouse);
-        let over_card = state
-            .overlay
-            .card_frame()
-            .is_some_and(|f| overlay::contains(f, mouse));
-        match over_word {
-            Some(index) => {
-                state.left_at = None;
-                let since = match state.hovering {
-                    Some((current, since)) if current == index => since,
-                    _ => {
-                        let now = Instant::now();
-                        state.hovering = Some((index, now));
-                        now
+        if state.overlay.card_for.is_none() {
+            state.card_fix = None;
+            state.card_word = None;
+        }
+        if in_corridor(state, mouse) {
+            // On the card, its word, or the way between: nothing closes and
+            // nothing under the card can steal the hover.
+            state.left_at = None;
+            state.hovering = None;
+        } else {
+            let over_word = state
+                .words
+                .iter()
+                .find(|(_, rect)| overlay::contains(grow(*rect, 2.0), mouse))
+                .copied();
+            match over_word {
+                Some((index, word)) => {
+                    state.left_at = None;
+                    let since = match state.hovering {
+                        Some((current, since)) if current == index => since,
+                        _ => {
+                            let now = Instant::now();
+                            state.hovering = Some((index, now));
+                            now
+                        }
+                    };
+                    if since.elapsed() >= HOVER {
+                        open_card(state, index, word, self);
                     }
-                };
-                if since.elapsed() >= HOVER
-                    && let Some((_, word)) = state.words.iter().find(|(i, _)| *i == index)
-                {
-                    let members = group(state, index);
-                    let word = *word;
-                    state
-                        .overlay
-                        .show_card(index, &members, &state.text, word, self.target());
                 }
-            }
-            None if over_card => state.left_at = None,
-            None => {
-                state.hovering = None;
-                if state.overlay.card_for.is_some() {
-                    let left = *state.left_at.get_or_insert_with(Instant::now);
-                    if left.elapsed() >= LEAVE {
-                        state.overlay.hide_card();
-                        state.left_at = None;
+                None => {
+                    state.hovering = None;
+                    if state.overlay.card_for.is_some() {
+                        let left = *state.left_at.get_or_insert_with(Instant::now);
+                        if left.elapsed() >= LEAVE {
+                            state.overlay.hide_card();
+                            state.left_at = None;
+                        }
                     }
                 }
             }
@@ -427,8 +463,22 @@ impl Controller {
                 rect: *rect,
                 kind: state.fixes[*index].kind,
                 highlighted: highlighted.contains(index),
+                flash: false,
             })
             .collect();
+        let mut marks = marks;
+        if let Some((rects, since)) = &state.flashing {
+            if since.elapsed() < FLASH {
+                marks.extend(rects.iter().map(|rect| Mark {
+                    rect: *rect,
+                    kind: gramly_core::Kind::Correctness,
+                    highlighted: true,
+                    flash: true,
+                }));
+            } else {
+                state.flashing = None;
+            }
+        }
         let area = grow(field_rect, 4.0);
         state.overlay.marks(area, marks);
         let target = self.target();
@@ -491,7 +541,81 @@ fn refilter(state: &mut State) {
         .into_iter()
         .filter(|fix| !dismissed.contains(&(fix.original(text), fix.replacement.clone())))
         .collect();
-    state.overlay.hide_card();
+
+    // The open card follows its fix through the rebuild: same words and same
+    // replacement, it stays exactly as it is; same words with a better
+    // replacement (the model's, after Harper's), it changes in place; gone,
+    // it closes. Closing it unconditionally is what made a card shown for
+    // "ok" vanish a second later when the model's answer arrived.
+    let (Some(shown), Some(word)) = (state.card_fix.clone(), state.card_word) else {
+        state.overlay.hide_card();
+        return;
+    };
+    match state
+        .fixes
+        .iter()
+        .position(|f| f.start == shown.start && f.end == shown.end)
+    {
+        Some(index) if state.fixes[index] == shown => state.overlay.card_for = Some(index),
+        Some(index) => {
+            // Redrawn on the next tick, 50ms on; the content changes, the
+            // card does not blink away.
+            state.overlay.card_for = Some(index);
+            state.card_fix = Some(state.fixes[index].clone());
+            state.card_stale = Some(word);
+        }
+        None => state.overlay.hide_card(),
+    }
+}
+
+/// The fix an action is about: the one the card is showing, not the index
+/// baked into the button when the card was drawn - the list can have been
+/// rebuilt since.
+fn showing(state: &State, tagged: usize) -> usize {
+    state.overlay.card_for.unwrap_or(tagged)
+}
+
+fn open_card(state: &mut State, index: usize, word: CGRect, controller: &Controller) {
+    let members = group(state, index);
+    state.card_fix = state.fixes.get(index).cloned();
+    state.card_word = Some(word);
+    state
+        .overlay
+        .show_card(index, &members, &state.text, word, controller.target());
+}
+
+/// The card, its word, and the band between them, so the pointer can travel
+/// from word to card at any speed and by any route without the card closing
+/// and without a word lying under the card taking over.
+fn in_corridor(state: &State, mouse: CGPoint) -> bool {
+    let (Some(card), Some(word)) = (state.overlay.card_frame(), state.card_word) else {
+        return false;
+    };
+    if overlay::contains(card, mouse) || overlay::contains(grow(word, 3.0), mouse) {
+        return true;
+    }
+    let left = card.origin.x.min(word.origin.x) - 4.0;
+    let right = (card.origin.x + card.size.width).max(word.origin.x + word.size.width) + 4.0;
+    let card_top = card.origin.y + card.size.height;
+    let (low, high) = if card_top <= word.origin.y {
+        (card_top, word.origin.y)
+    } else {
+        (word.origin.y + word.size.height, card.origin.y)
+    };
+    mouse.x >= left && mouse.x <= right && mouse.y >= low - 2.0 && mouse.y <= high + 2.0
+}
+
+/// Starts the green glow on the words about to be accepted.
+fn flash(state: &mut State, indices: &[usize]) {
+    let rects: Vec<CGRect> = state
+        .words
+        .iter()
+        .filter(|(i, _)| indices.contains(i))
+        .map(|(_, rect)| *rect)
+        .collect();
+    if !rects.is_empty() {
+        state.flashing = Some((rects, Instant::now()));
+    }
 }
 
 /// One fix, through Accessibility if the app honours it and as a paste over a
@@ -516,6 +640,7 @@ fn accept_one(state: &mut State, index: usize) {
 /// Every fix in the field.
 fn accept_every(state: &mut State, _: &Controller) {
     let all: Vec<usize> = (0..state.fixes.len()).collect();
+    flash(state, &all);
     accept_fixes(state, &all);
 }
 
@@ -791,6 +916,11 @@ pub fn run() -> anyhow::Result<()> {
         words: Vec::new(),
         hovering: None,
         left_at: None,
+        card_fix: None,
+        card_word: None,
+        flashing: None,
+        card_stale: None,
+        woken: HashSet::new(),
         ai_error: None,
         ai_current: false,
         trusted,
