@@ -35,12 +35,22 @@ that are already right. Text with no mistakes gets an empty list.";
 /// The fixed prompt, then the detected language - appended rather than
 /// woven in, so the unchanging part leads every request.
 fn system_prompt(text: &str) -> String {
-    match crate::lang::detect(text).name() {
-        Some(name) => format!(
-            "{SYSTEM}\n\nThis text is in {name}. Correct it as {name}, write every \
-             replacement in {name}, and write each reason in {name}. Never translate it."
+    let languages = crate::lang::sentence_languages(text);
+    match languages.as_slice() {
+        [one] => match one.name() {
+            Some(name) => format!(
+                "{SYSTEM}\n\nThis text is in {name}. Correct it as {name}, write every \
+                 replacement in {name}, and write each reason in {name}. Never translate it."
+            ),
+            None => SYSTEM.to_string(),
+        },
+        // Naming one language for a mixed paragraph told the model the French
+        // half was English. Each sentence is held to its own instead.
+        [_, _, ..] => format!(
+            "{SYSTEM}\n\nThis text mixes languages. Correct each sentence in the \
+             language it is written in, and never translate any of it."
         ),
-        None => SYSTEM.to_string(),
+        [] => SYSTEM.to_string(),
     }
 }
 
@@ -230,6 +240,19 @@ mod tests {
         eprintln!("{fixes:#?}");
         assert!(fixed.contains("suis allé"), "{fixed}");
         assert!(fixed.contains("ai acheté"), "{fixed}");
+    }
+
+    #[test]
+    #[ignore]
+    fn live_model_keeps_a_mixed_line_in_both_languages() {
+        let key = std::env::var("GRAMLY_OPENROUTER_KEY").expect("GRAMLY_OPENROUTER_KEY");
+        let text = "This is cool and nice. Mais je pourai pas faire l'onneur.";
+        let fixes = check(&key, text).expect("model call");
+        let fixed = apply(text, &fixes);
+        eprintln!("{fixed}\n{fixes:#?}");
+        assert!(fixed.starts_with("This is cool and nice."), "{fixed}");
+        assert!(fixed.contains("pourrai"), "{fixed}");
+        assert!(fixed.contains("honneur"), "{fixed}");
     }
 
     #[test]

@@ -30,19 +30,44 @@ impl Local {
         self.known = words.into_iter().map(|w| w.to_lowercase()).collect();
     }
 
-    /// Fixes for the English paragraphs of `text`. Other languages are left
+    /// Fixes for the English sentences of `text`. Other languages are left
     /// to the model; see `lang`.
+    ///
+    /// Judged per sentence, not per paragraph: "This is cool and nice. Mais
+    /// je ne pourrai pas faire l'honneur." is one line, read as English, and
+    /// Harper offered "purr's" for "pourrai" and "longer" for "l'honneur".
+    /// Harper still reads the whole paragraph, for its context; what it says
+    /// about a sentence in another language is dropped.
     pub fn check(&mut self, text: &str) -> Vec<Fix> {
         let mut fixes = Vec::new();
         for (offset, paragraph) in crate::worker::paragraphs(text) {
-            if !crate::lang::detect(paragraph).local_pass() {
+            if !crate::lang::detect(paragraph).local_pass() && !mixed(paragraph) {
                 continue;
             }
-            fixes.extend(self.check_english(paragraph).into_iter().map(|mut fix| {
-                fix.start += offset;
-                fix.end += offset;
-                fix
-            }));
+            let mut verdicts: Vec<((usize, usize), bool)> = Vec::new();
+            for fix in self.check_english(paragraph) {
+                let bounds = crate::fix::sentence(paragraph, fix.start);
+                let english = match verdicts.iter().find(|(b, _)| *b == bounds) {
+                    Some((_, english)) => *english,
+                    None => {
+                        let sentence: String = paragraph
+                            .chars()
+                            .skip(bounds.0)
+                            .take(bounds.1 - bounds.0)
+                            .collect();
+                        let english = crate::lang::detect(&sentence).local_pass();
+                        verdicts.push((bounds, english));
+                        english
+                    }
+                };
+                if english {
+                    fixes.push(Fix {
+                        start: fix.start + offset,
+                        end: fix.end + offset,
+                        ..fix
+                    });
+                }
+            }
         }
         fixes
     }
@@ -83,6 +108,22 @@ impl Local {
         }
         fixes
     }
+}
+
+/// Whether any sentence of a paragraph reads as English, so a mostly-French
+/// paragraph with one English sentence still gets that sentence checked.
+fn mixed(paragraph: &str) -> bool {
+    let mut at = 0;
+    let len = paragraph.chars().count();
+    while at < len {
+        let (start, end) = crate::fix::sentence(paragraph, at);
+        let sentence: String = paragraph.chars().skip(start).take(end - start).collect();
+        if crate::lang::detect(&sentence) == crate::lang::Language::English {
+            return true;
+        }
+        at = end.max(at + 1);
+    }
+    false
 }
 
 fn kind_of(kind: LintKind) -> Kind {
@@ -149,6 +190,32 @@ mod tests {
             fixes.iter().any(|f| f.original(text) == "sentance"),
             "{fixes:?}"
         );
+    }
+
+    #[test]
+    fn french_sentence_after_english_on_one_line_is_left_alone() {
+        let mut local = Local::new(Dialect::American);
+        let text = "This is cool and nice. Mais je ne pourrai pas faire l'honneur.";
+        let fixes = local.check(text);
+        let french_start = text.find("Mais").unwrap();
+        assert!(
+            fixes.iter().all(|f| f.start < french_start),
+            "{:?}",
+            fixes.iter().map(|f| f.original(text)).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn english_mistake_before_french_on_one_line_is_still_caught() {
+        let mut local = Local::new(Dialect::American);
+        let text = "This sentance is cool and nice. Mais je ne pourrai pas faire l'honneur.";
+        let fixes = local.check(text);
+        assert!(
+            fixes.iter().any(|f| f.original(text) == "sentance"),
+            "{fixes:?}"
+        );
+        let french_start = text.find("Mais").unwrap();
+        assert!(fixes.iter().all(|f| f.start < french_start), "{fixes:?}");
     }
 
     #[test]

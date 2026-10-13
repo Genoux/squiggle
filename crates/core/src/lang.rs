@@ -56,6 +56,24 @@ impl Language {
     }
 }
 
+/// The distinct languages of a text's sentences, in order of appearance,
+/// ignoring sentences too short to tell.
+pub fn sentence_languages(text: &str) -> Vec<Language> {
+    let mut found = Vec::new();
+    let len = text.chars().count();
+    let mut at = 0;
+    while at < len {
+        let (start, end) = crate::fix::sentence(text, at);
+        let sentence: String = text.chars().skip(start).take(end - start).collect();
+        let language = detect(&sentence);
+        if language != Language::Unknown && !found.contains(&language) {
+            found.push(language);
+        }
+        at = end.max(at + 1);
+    }
+    found
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
