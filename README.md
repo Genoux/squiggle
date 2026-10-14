@@ -6,7 +6,7 @@ the fix, click **Accept**, or take them all at once.
 Gramly is a grammar checker for the text field you already have open - Mail,
 Notes, Slack, a browser, anything that tells macOS what it is showing. Spelling
 and grammar are checked on your Mac by [Harper](https://github.com/Automattic/harper);
-the subtler mistakes go to Claude Haiku 5.5 through your own
+the subtler mistakes go to Gemini 3.5 Flash-Lite through your own
 [OpenRouter](https://openrouter.ai) key, for about a dollar a month of heavy use.
 
 ## Requirements
@@ -49,8 +49,7 @@ Updating is `git pull && ./packaging/install.sh`. Removing it is
 | Red underline | A mistake - spelling, grammar, a wrong word |
 | Blue underline | Correct, but could read better |
 | Hover an underline | The fix, why, **Accept** / **Dismiss** / **Add to dictionary** |
-| The pill in the field's corner | **Accept all** |
-| Menu bar icon | Pause, AI on/off, key, personal dictionary |
+| Menu bar icon | Pause for an hour, turn off in the app in front, AI on/off, key, spelling, personal dictionary |
 | `gramly doctor` | What Gramly can see in the field you click into |
 | `gramly check < file.txt` | The same suggestions, printed |
 
@@ -64,10 +63,13 @@ Terminals are skipped on purpose, as are password fields.
 enabled = true
 ai = true
 dialect = "american"   # british, canadian, australian, indian
+off_in = "com.tinyspeck.slackmacgap"   # apps turned off from the menu
 openrouter_key = "sk-or-..."
 ```
 
-Your dictionary is `~/.config/gramly/dictionary.txt`, one word per line.
+Your dictionary opens from the menu bar icon → **Personal dictionary…**, and
+lives in `~/.config/gramly/dictionary.txt`, one word per line. A word
+in it is never flagged and never changed, by the on-device pass or the AI.
 
 ## Privacy
 
@@ -81,6 +83,8 @@ stored by Gramly. Password fields are never read.
 ./dev            # run from this checkout, restart on save
 cargo test --workspace
 GRAMLY_OPENROUTER_KEY=sk-or-... cargo test -p gramly-core -- --ignored   # live model
+cargo run -- lab          # accept fixes in real text fields, off screen, and audit them
+./sandbox                 # every release check, with a report; --ai, --models, --screen, --all
 ```
 
 See [AGENTS.md](AGENTS.md) for why things are built the way they are, and

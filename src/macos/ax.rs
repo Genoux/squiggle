@@ -17,6 +17,14 @@ use std::ptr::NonNull;
 /// one costs a skipped frame rather than a frozen menu bar.
 const MESSAGING_TIMEOUT: f32 = 0.15;
 
+/// How long a write gets to show. Zen applies a selection and a write to
+/// `AXSelectedText` a moment after accepting them: read at once, the old
+/// text came back, the write was taken for refused and the fix was pasted
+/// a second time ("oldad from frameold ad from"). Apps that answer at once
+/// cost nothing; Chromium, which ignores the write, costs this before its
+/// paste.
+const SETTLE: std::time::Duration = std::time::Duration::from_millis(300);
+
 /// Apps whose "text area" is a terminal's scrollback. Correcting a shell
 /// command is never what was meant, and Grammarly skips them for the same
 /// reason.
@@ -29,6 +37,7 @@ const SKIPPED_APPS: &[&str] = &[
     "com.github.wez.wezterm",
     "dev.warp.Warp-Stable",
     "co.zeit.hyper",
+    "com.stablyai.orca",
 ];
 
 /// Roles that hold prose the user is typing. Secure fields are deliberately
@@ -52,6 +61,57 @@ pub struct Field {
     /// The field's text children for the text they were read for: where each
     /// one starts in the field's value (UTF-16) and how long it is.
     segments: std::cell::RefCell<Option<(String, Vec<Segment>)>>,
+    /// What the field may show while empty, read once: its placeholder,
+    /// description and title.
+    labels: std::cell::OnceCell<Vec<String>>,
+    /// How the app counts the text last read, where that differs from the
+    /// value: for each UTF-16 unit of the value, its offset in the app's
+    /// count, or None for a unit the app does not count. None overall when
+    /// the two agree or the app cannot say. Zen gives ChatGPT's "⌘
+    /// AdCollection" chip icon a U+FFFC in its offsets but none in
+    /// `AXValue`, so every range after it landed one character early
+    /// ("anold" -> "an old" wrote "Pickan old"). Chrome is the other way
+    /// round: the line breaks between paragraphs are in the value and not
+    /// in its offsets, so every line after the first was off by one more.
+    ///
+    /// The flag says whether the offsets were checked against the app and
+    /// held: Zen's list returns its bullets in `AXStringForRange` but does
+    /// not count them, so a map built from that string is wrong, and
+    /// underlines are then placed by the field's children instead.
+    hidden: std::cell::RefCell<(String, Option<OffsetMap>, bool)>,
+    /// The last `AXValue` of a web field, and it with its line breaks put
+    /// back; see [`with_lines`](Self::with_lines).
+    lines: std::cell::RefCell<Option<(String, String)>>,
+    /// Whether the app honours a write to `AXSelectedText`; `None` until
+    /// one is tried. Once it has ignored one, the rest go straight to the
+    /// paste, so a write that lands late cannot be pasted a second time.
+    direct: std::cell::Cell<Option<bool>>,
+}
+
+/// For each UTF-16 unit of a field's value, its offset in the app's own
+/// count, or None for a unit the app does not count; see `Field::hidden`.
+type OffsetMap = Vec<Option<usize>>;
+
+/// Whether a field is part of a web page - a browser's, or an Electron
+/// app's. Both Gecko and Chromium give their elements a DOM identity, and
+/// native AppKit fields never do.
+fn web(element: &AXUIElement) -> bool {
+    attribute(element, "AXEditableAncestor").is_some()
+        || attribute(element, "AXDOMIdentifier").is_some()
+}
+
+/// What a direct write did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Write {
+    /// The field now reads as expected.
+    Done,
+    /// The field is exactly as it was: the app ignored the write, and the
+    /// paste may try.
+    Ignored,
+    /// The selection could not be confirmed, or the field changed into
+    /// something else. Nothing more may be written: a paste now could land
+    /// on the wrong text.
+    Unsafe,
 }
 
 struct Segment {
@@ -131,12 +191,47 @@ pub fn frontmost_pid() -> Option<i32> {
         .map(|app| app.processIdentifier())
 }
 
+/// The app in front as (bundle id, name), for the menu's "Turn off in ...".
+/// None while Gramly itself is in front: it comes forward only for its own
+/// dialogs, which are not what the item means.
+pub fn frontmost_app() -> Option<(String, String)> {
+    let app = objc2_app_kit::NSWorkspace::sharedWorkspace().frontmostApplication()?;
+    if app.processIdentifier() == std::process::id() as i32 {
+        return None;
+    }
+    let id = app.bundleIdentifier()?.to_string();
+    let name = app
+        .localizedName()
+        .map(|n| n.to_string())
+        .unwrap_or_else(|| id.clone());
+    Some((id, name))
+}
+
+/// The title of the focused window of the app in front, for the lab's
+/// report of what took the keyboard.
+pub fn frontmost_window_title() -> Option<String> {
+    let pid = frontmost_pid()?;
+    let app = unsafe { AXUIElement::new_application(pid) };
+    let window = attribute(&app, "AXFocusedWindow")?;
+    let window = window.downcast_ref::<AXUIElement>()?;
+    string_attribute(window, "AXTitle")
+}
+
+/// A terminal, skipped whatever the menu says.
+pub fn terminal(bundle_id: &str) -> bool {
+    SKIPPED_APPS.contains(&bundle_id)
+}
+
 /// Asks an app to expose its text. Electron apps (Slack, Discord, VS Code,
 /// Claude) and Chromium build no accessibility tree until an assistive app
 /// sets `AXManualAccessibility` on them - which is what Grammarly does, and
 /// why it showed in a Claude chat box where Gramly did not. Apps that do not
-/// know the attribute ignore it.
+/// know the attribute ignore it. Skipped apps are not asked: Orca, an
+/// Electron terminal, stopped taking pasted images once Gramly woke it.
 pub fn wake(pid: i32) {
+    if SKIPPED_APPS.contains(&bundle_id(pid).as_str()) {
+        return;
+    }
     let app = unsafe { AXUIElement::new_application(pid) };
     unsafe { app.set_messaging_timeout(MESSAGING_TIMEOUT) };
     let name = CFString::from_static_str("AXManualAccessibility");
@@ -216,11 +311,100 @@ impl Field {
             element,
             own_bounds: std::cell::Cell::new(None),
             segments: std::cell::RefCell::new(None),
+            labels: std::cell::OnceCell::new(),
+            hidden: std::cell::RefCell::new((String::new(), None, true)),
+            lines: std::cell::RefCell::new(None),
+            direct: std::cell::Cell::new(None),
         }
     }
 
+    /// The field's text, empty while it only shows its placeholder. Web
+    /// composers draw the placeholder as text: ChatGPT's empty box in Zen
+    /// reads "Ask ChatGPT\n", with no AXPlaceholderValue, the same words in
+    /// AXDescription. Checking it underlined the placeholder.
     pub fn value(&self) -> Option<String> {
-        string_attribute(&self.element, "AXValue")
+        let value = string_attribute(&self.element, "AXValue")?;
+        let shown = value.trim();
+        if shown.is_empty() {
+            return Some(value);
+        }
+        let labels = self.labels.get_or_init(|| {
+            ["AXPlaceholderValue", "AXDescription", "AXTitle"]
+                .into_iter()
+                .filter_map(|name| string_attribute(&self.element, name))
+                .map(|label| label.trim().to_string())
+                .filter(|label| !label.is_empty())
+                .collect()
+        });
+        let placeholder = labels.iter().any(|label| label == shown);
+        let text = if placeholder {
+            String::new()
+        } else if web(&self.element) {
+            self.with_lines(value)
+        } else {
+            value
+        };
+        if self.hidden.borrow().0 != text {
+            let map = align(&self.element, &text);
+            *self.hidden.borrow_mut() = (text.clone(), map, true);
+            let reliable = self.offsets_hold(&text);
+            self.hidden.borrow_mut().2 = reliable;
+        }
+        Some(text)
+    }
+
+    /// `value` with a line break wherever the field shows a new line and the
+    /// value has none. Zen reports a box of three paragraphs as one run of
+    /// text ("...we roll backThanks"), and Gramly read "backThanks" as one
+    /// word; its bulleted list as "• fix the llimit• add a tset". The field's
+    /// children still say where each line is: every paragraph or list item
+    /// is a group of its own. Worked out once per change of the value.
+    fn with_lines(&self, value: String) -> String {
+        if let Some((raw, rebuilt)) = &*self.lines.borrow()
+            && *raw == value
+        {
+            return rebuilt.clone();
+        }
+        let rebuilt = add_line_breaks(&value, &blocks_of(&self.element));
+        *self.lines.borrow_mut() = Some((value, rebuilt.clone()));
+        rebuilt
+    }
+
+    /// A UTF-16 range of the value as the app counts it; see
+    /// [`hidden`](Self::hidden). Uses the text [`value`](Self::value) last
+    /// read, which every caller has just done.
+    fn app_range(&self, location: usize, length: usize) -> (usize, usize) {
+        let hidden = self.hidden.borrow();
+        let Some(map) = &hidden.1 else {
+            return (location, length);
+        };
+        // The range starts at its first counted unit and ends after its
+        // last, so an object the app counts just before it stays outside.
+        let after = |from: usize| {
+            map.get(from..)
+                .and_then(|rest| rest.iter().flatten().next().copied())
+                .unwrap_or_else(|| map.iter().flatten().last().map_or(0, |&i| i + 1))
+        };
+        let start = after(location);
+        let end = map[..(location + length).min(map.len())]
+            .iter()
+            .rev()
+            .flatten()
+            .next()
+            .map_or(start, |&i| i + 1);
+        (start, end.max(start) - start)
+    }
+
+    /// Whether the value has a line break right after `end`: the end of a
+    /// line, which some apps cannot tell apart from the start of the next.
+    fn ends_line(&self, end: usize) -> bool {
+        let hidden = self.hidden.borrow();
+        hidden.0.encode_utf16().nth(end) == Some(u16::from(b'\n'))
+    }
+
+    /// Whether the value has a line break right before `start`.
+    fn starts_line(&self, start: usize) -> bool {
+        start > 0 && self.ends_line(start - 1)
     }
 
     /// The field's own rectangle, in Accessibility's coordinates: global,
@@ -261,6 +445,11 @@ impl Field {
     /// Asked of the field, or of the text child holding the range when the
     /// field cannot say. `None` and that fix is simply not drawn.
     pub fn bounds(&self, location: usize, length: usize) -> Option<CGRect> {
+        if !self.hidden.borrow().2
+            && let Some(rect) = self.through_children(location, length)
+        {
+            return Some(rect);
+        }
         if self.own_bounds.get() != Some(false) {
             let own = self.own(location, length);
             if self.own_bounds.get().is_none() {
@@ -274,6 +463,7 @@ impl Field {
     }
 
     fn own(&self, location: usize, length: usize) -> Option<CGRect> {
+        let (location, length) = self.app_range(location, length);
         let range = range_value(location, length)?;
         let name = CFString::from_static_str("AXBoundsForRange");
         let mut value: *const CFType = std::ptr::null();
@@ -318,31 +508,462 @@ impl Field {
         Field::new(segment.element.clone()).own(local, length)
     }
 
-    /// Selects a UTF-16 range in the field.
+    /// Selects a UTF-16 range in the field; whether the app reports that
+    /// exact range selected within [`SETTLE`].
+    /// Selects a UTF-16 range of the value [`value`](Self::value) last
+    /// read, and confirms the app selected exactly that text.
     pub fn select(&self, location: usize, length: usize) -> bool {
-        let Some(range) = range_value(location, length) else {
+        let value_location = location;
+        let value_end = location + length;
+        let original = {
+            let hidden = self.hidden.borrow();
+            let units: Vec<u16> = hidden.0.encode_utf16().collect();
+            match units.get(location..location + length) {
+                Some(span) => String::from_utf16_lossy(span),
+                None => return false,
+            }
+        };
+        let Some((location, length)) = self.locate(location, length, &original) else {
+            note!(
+                "{}: the text to fix was not found where the app counts it",
+                self.app()
+            );
             return false;
         };
+        // A range that starts or ends a line, in a web field, is selected
+        // with the keyboard. Web engines count no line break between
+        // paragraphs, so the end of one line and the start of the next are
+        // one offset, read as the next line by Chrome and as the previous
+        // one by Zen: the selection took the break with it and the paste
+        // joined the lines ("- fix the limit- add a test", "Hi team,The
+        // deploy"), while `AXSelectedText` read only the word. The caret
+        // goes one character in, Left takes it to the start, and
+        // Shift-Right once per character selects the rest: the keyboard
+        // never leaves the line.
+        let touches = length > 0
+            && web(&self.element)
+            && (self.starts_line(value_location) || self.ends_line(value_end));
         let name = CFString::from_static_str("AXSelectedTextRange");
-        unsafe { self.element.set_attribute_value(&name, &range) == AXError::Success }
+        if touches {
+            let step = original.chars().next().map_or(1, char::len_utf16);
+            let Some(caret) = range_value(location + step, 0) else {
+                return false;
+            };
+            if unsafe { self.element.set_attribute_value(&name, &caret) } != AXError::Success
+                || !settle(|| self.selected_range() == Some((location + step, 0)))
+            {
+                return false;
+            }
+            crate::macos::paste::left();
+            for _ in 0..original.chars().count() {
+                crate::macos::paste::extend_right();
+            }
+        } else {
+            let Some(range) = range_value(location, length) else {
+                return false;
+            };
+            if unsafe { self.element.set_attribute_value(&name, &range) } != AXError::Success {
+                return false;
+            }
+        }
+        // Confirmed, not trusted: whatever is selected is what the next
+        // write or paste replaces, and an app that kept an older, larger
+        // selection had a whole paragraph replaced by one word.
+        if !settle(|| self.selected_range() == Some((location, length))) {
+            return false;
+        }
+        if std::env::var_os("GRAMLY_TRACE").is_some() {
+            let value = self.hidden.borrow().0.clone();
+            note!(
+                "select {original:?} at {location}+{length}: app string {:?}, selected {:?}, value {:?}",
+                string_for_range(&self.element, 0, value.encode_utf16().count() + 4),
+                string_attribute(&self.element, "AXSelectedText"),
+                value
+            );
+        }
+        // The range the app reports is only its own count. What it holds
+        // must be the text being fixed: in a bulleted list a range one
+        // character early was confirmed, and the paste ate the space before
+        // the word (a fix to "llimit" in a list left the field a character
+        // short, and the line's spacing with it).
+        match string_attribute(&self.element, "AXSelectedText") {
+            Some(selected) if selected != original => {
+                note!(
+                    "{}: selected {:?} where {:?} was expected",
+                    self.app(),
+                    selected,
+                    original
+                );
+                false
+            }
+            _ => true,
+        }
+    }
+
+    /// For `gramly lab --probe`: how the app counts this field's text.
+    pub fn probe(&self) -> String {
+        let count = attribute(&self.element, "AXNumberOfCharacters").and_then(|v| {
+            v.downcast_ref::<objc2_core_foundation::CFNumber>()
+                .and_then(|n| n.as_i64())
+        });
+        let whole = count.and_then(|n| string_for_range(&self.element, 0, n as usize));
+        format!(
+            "AXNumberOfCharacters {count:?}, AXStringForRange(0, that) {whole:?}, selection {:?} {:?}",
+            self.selected_range(),
+            string_attribute(&self.element, "AXSelectedText")
+        )
+    }
+
+    /// For `gramly lab --probe`: the field's descendants, role and text.
+    pub fn tree(&self) -> String {
+        let mut out = String::new();
+        let mut stack: Vec<(CFRetained<AXUIElement>, usize)> = children_of(&self.element)
+            .into_iter()
+            .rev()
+            .map(|c| (c, 1))
+            .collect();
+        while let Some((node, depth)) = stack.pop() {
+            let role = string_attribute(&node, "AXRole").unwrap_or_default();
+            let value = string_attribute(&node, "AXValue");
+            out.push_str(&format!("{}{role} {value:?}\n", "  ".repeat(depth)));
+            if depth < 4 {
+                stack.extend(children_of(&node).into_iter().rev().map(|c| (c, depth + 1)));
+            }
+        }
+        out
+    }
+
+    /// For `gramly lab --probe`: a value range as the app counts it, and
+    /// what the app holds there.
+    pub fn mapped(&self, location: usize, length: usize) -> String {
+        let (at, len) = self.app_range(location, length);
+        format!(
+            "{location}+{length} -> {at}+{len} {:?}, map {:?}",
+            string_for_range(&self.element, at, len),
+            self.hidden.borrow().1.as_ref().map(|m| m.len())
+        )
+    }
+
+    /// For `gramly lab --probe`: sets the selection exactly as given, in the
+    /// app's own offsets.
+    pub fn select_raw(&self, location: usize, length: usize) {
+        if let Some(range) = range_value(location, length) {
+            let name = CFString::from_static_str("AXSelectedTextRange");
+            unsafe { self.element.set_attribute_value(&name, &range) };
+        }
+    }
+
+    /// Whether the app holds, at the offsets [`app_range`](Self::app_range)
+    /// gives, the words `text` has: checked on a few words across it. True
+    /// when the app cannot say, so nothing changes for an app without
+    /// `AXStringForRange`.
+    fn offsets_hold(&self, text: &str) -> bool {
+        let units: Vec<u16> = text.encode_utf16().collect();
+        let words: Vec<(usize, usize)> = {
+            let mut out = Vec::new();
+            let mut start = None;
+            for (i, &u) in units.iter().enumerate() {
+                let letter = char::from_u32(u32::from(u)).is_some_and(char::is_alphanumeric);
+                match (letter, start) {
+                    (true, None) => start = Some(i),
+                    (false, Some(s)) => {
+                        out.push((s, i - s));
+                        start = None;
+                    }
+                    _ => {}
+                }
+            }
+            if let Some(s) = start {
+                out.push((s, units.len() - s));
+            }
+            out.retain(|&(_, len)| len >= 3);
+            out
+        };
+        if words.is_empty() {
+            return true;
+        }
+        let picks = [0, words.len() / 2, words.len() - 1];
+        picks.iter().all(|&i| {
+            let (at, len) = words[i];
+            let (app_at, app_len) = self.app_range(at, len);
+            match string_for_range(&self.element, app_at, app_len) {
+                Some(found) => found.encode_utf16().eq(units[at..at + len].iter().copied()),
+                None => true,
+            }
+        })
+    }
+
+    /// Where the app counts `original`, the value's text at `location`: the
+    /// range [`app_range`](Self::app_range) gives when the app holds it
+    /// there, otherwise the nearest offset within a few characters that
+    /// does, each asked on its own (a longer string read at once may hold
+    /// characters the app does not count, as Zen's list holds its bullets).
+    /// None when the app can say and the text is nowhere near.
+    fn locate(&self, location: usize, length: usize, original: &str) -> Option<(usize, usize)> {
+        const REACH: usize = 24;
+        let (start, length) = self.app_range(location, length);
+        let want: Vec<u16> = original.encode_utf16().collect();
+        if want.is_empty() {
+            return Some((start, length));
+        }
+        let holds = |at: usize| {
+            string_for_range(&self.element, at, want.len())
+                .map(|s| s.encode_utf16().eq(want.iter().copied()))
+        };
+        match holds(start) {
+            Some(true) => return Some((start, want.len())),
+            // The app cannot say; the selection is checked once made.
+            None if string_for_range(&self.element, start, 1).is_none() => {
+                return Some((start, length));
+            }
+            _ => {}
+        }
+        let found = (1..=REACH)
+            .flat_map(|d| [start.checked_sub(d), Some(start + d)])
+            .flatten()
+            .find(|&at| holds(at) == Some(true))?;
+        note!(
+            "{}: offsets differ from the value by {}; fixed by finding the text",
+            self.app(),
+            found as isize - start as isize
+        );
+        Some((found, want.len()))
+    }
+
+    /// The bundle id of the app the field belongs to, for the log.
+    fn app(&self) -> String {
+        let mut pid: i32 = 0;
+        unsafe { self.element.pid(NonNull::from(&mut pid)) };
+        bundle_id(pid)
+    }
+
+    /// The selection, as the app counts it.
+    fn selected_range(&self) -> Option<(usize, usize)> {
+        let value = attribute(&self.element, "AXSelectedTextRange")?;
+        let value = value.downcast_ref::<AXValue>()?;
+        let mut range = CFRange::new(0, 0);
+        let ok = unsafe { value.value(AXValueType::CFRange, NonNull::from(&mut range).cast()) };
+        ok.then_some((range.location as usize, range.length as usize))
     }
 
     /// Replaces a UTF-16 range the way typing would: select it, then set the
     /// selected text. Going through the selection rather than writing the
     /// whole `AXValue` keeps the app's undo stack and its cursor intact.
     ///
-    /// Returns whether the field now reads as expected. Some apps (Chromium
-    /// among them) accept the write and do nothing, so the result is
-    /// verified rather than trusted.
-    pub fn replace(&self, location: usize, length: usize, text: &str, expected: &str) -> bool {
+    /// `before` is the field's text now, `expected` its text after. Some
+    /// apps (Chromium among them) accept the write and do nothing, so the
+    /// result is read back rather than trusted - and only a field left
+    /// exactly as it was counts as ignored. One that changed into anything
+    /// else did take a write, and pasting the fix on top wrote it twice.
+    pub fn replace(
+        &self,
+        location: usize,
+        length: usize,
+        text: &str,
+        before: &str,
+        expected: &str,
+    ) -> Write {
+        // Web fields are never written directly; the paste goes through the
+        // page's own input handling. Zen applied a direct write late in one
+        // case and, in another, replaced a whole sentence with one word
+        // while reporting the right selection.
+        if self.direct.get() == Some(false) || web(&self.element) {
+            self.direct.set(Some(false));
+            return Write::Ignored;
+        }
         if !self.select(location, length) {
-            return false;
+            return Write::Unsafe;
         }
         let name = CFString::from_static_str("AXSelectedText");
         let value = CFString::from_str(text);
         let written = unsafe { self.element.set_attribute_value(&name, &value) };
-        written == AXError::Success && self.value().as_deref() == Some(expected)
+        if written == AXError::Success && settle(|| self.value().as_deref() == Some(expected)) {
+            self.direct.set(Some(true));
+            return Write::Done;
+        }
+        if self.value().as_deref() == Some(before) {
+            self.direct.set(Some(false));
+            Write::Ignored
+        } else {
+            Write::Unsafe
+        }
     }
+}
+
+/// The text of each line a web field shows, in order: each group that holds
+/// text of its own (a paragraph, a list item), with its list marker.
+fn blocks_of(field: &AXUIElement) -> Vec<String> {
+    const MOST_NODES: usize = 400;
+    let mut blocks = Vec::new();
+    let mut visited = 0;
+    let mut stack: Vec<CFRetained<AXUIElement>> = children_of(field).into_iter().rev().collect();
+    while let Some(node) = stack.pop() {
+        visited += 1;
+        if visited > MOST_NODES {
+            return Vec::new();
+        }
+        let children = children_of(&node);
+        let texts = |n: &AXUIElement| {
+            matches!(
+                string_attribute(n, "AXRole").as_deref(),
+                Some("AXStaticText" | "AXListMarker")
+            )
+        };
+        if children.iter().any(|c| texts(c)) {
+            // A line: its text is every piece of text inside it.
+            let mut line = String::new();
+            let mut inner: Vec<CFRetained<AXUIElement>> = children.into_iter().rev().collect();
+            while let Some(piece) = inner.pop() {
+                visited += 1;
+                if texts(&piece) {
+                    line.push_str(&string_attribute(&piece, "AXValue").unwrap_or_default());
+                } else {
+                    inner.extend(children_of(&piece).into_iter().rev());
+                }
+            }
+            blocks.push(line);
+        } else {
+            stack.extend(children.into_iter().rev());
+        }
+    }
+    blocks
+}
+
+/// `value` with a line break after each of `blocks` but the last, where it
+/// has none. Unchanged unless every block is found, in order.
+fn add_line_breaks(value: &str, blocks: &[String]) -> String {
+    let blocks: Vec<&String> = blocks.iter().filter(|b| !b.trim().is_empty()).collect();
+    if blocks.len() < 2 {
+        return value.to_string();
+    }
+    let mut breaks = Vec::new();
+    let mut cursor = 0;
+    for (i, block) in blocks.iter().enumerate() {
+        let Some(at) = value[cursor..].find(block.as_str()) else {
+            return value.to_string();
+        };
+        let end = cursor + at + block.len();
+        if i + 1 < blocks.len() && !value[end..].starts_with('\n') {
+            breaks.push(end);
+        }
+        cursor = end;
+    }
+    let mut out = String::with_capacity(value.len() + breaks.len());
+    let mut last = 0;
+    for at in breaks {
+        out.push_str(&value[last..at]);
+        out.push('\n');
+        last = at;
+    }
+    out.push_str(&value[last..]);
+    out
+}
+
+/// How the app counts `text`; see [`Field::hidden`]. Asked of
+/// `AXStringForRange`, which counts as the app's selection and bounds do,
+/// and aligned with the value unit by unit: a unit the app has and the
+/// value lacks (Zen's object character, a list's bullet) is skipped in the
+/// app's count, and a line break the value has and the app lacks (Chrome
+/// between paragraphs) maps to nothing. None, so offsets pass through
+/// untouched, when the two agree, when they differ in any other way, or
+/// when the app cannot say: [`Field::select`] still finds the text before
+/// writing.
+fn align(element: &AXUIElement, text: &str) -> Option<OffsetMap> {
+    let units: Vec<u16> = text.encode_utf16().collect();
+    if units.is_empty() {
+        return None;
+    }
+    let newline = u16::from(b'\n');
+    let limit = 16 + units.len() / 5;
+    // Chrome answers nothing for a range that runs past its own count,
+    // which is shorter than the value: then the longest it will answer.
+    let app = match string_for_range(element, 0, units.len()) {
+        Some(app) => app,
+        None => {
+            let (mut lo, mut hi) = (0, units.len());
+            while lo < hi {
+                let mid = (lo + hi).div_ceil(2);
+                if string_for_range(element, 0, mid).is_some() {
+                    lo = mid;
+                } else {
+                    hi = mid - 1;
+                }
+            }
+            string_for_range(element, 0, lo)?
+        }
+    };
+    let mut app: Vec<u16> = app.encode_utf16().collect();
+    if app == units {
+        return None;
+    }
+    // Whichever is shorter lacks what the other has: Zen's chip is a unit
+    // the app counts and the value lacks; its list bullets the other way.
+    let fewer = app.len() < units.len();
+    // The app's string is as long as the value plus its extras, which are
+    // only known once found: ask again, longer, until the value is covered.
+    loop {
+        let mut map = Vec::with_capacity(units.len());
+        let (mut i, mut j, mut extras) = (0, 0, 0);
+        while j < units.len() {
+            if i < app.len() && app[i] == units[j] {
+                map.push(Some(i));
+                i += 1;
+                j += 1;
+            } else if units[j] == newline || fewer {
+                // The value has a unit the app does not count: a line break
+                // Chrome or Zen leaves out, a bullet Zen shows and skips.
+                map.push(None);
+                j += 1;
+                extras += 1;
+            } else if i < app.len() {
+                i += 1;
+                extras += 1;
+            } else {
+                break;
+            }
+            if extras > limit {
+                return None;
+            }
+        }
+        if j == units.len() {
+            return Some(map);
+        }
+        let longer = app.len() + (units.len() - j);
+        app = string_for_range(element, 0, longer)?
+            .encode_utf16()
+            .collect();
+        if app.len() < longer {
+            return None;
+        }
+    }
+}
+
+/// Whether `done` comes true within [`SETTLE`], asked every 15ms.
+fn settle(mut done: impl FnMut() -> bool) -> bool {
+    let deadline = std::time::Instant::now() + SETTLE;
+    loop {
+        if done() {
+            return true;
+        }
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(15));
+    }
+}
+
+fn string_for_range(element: &AXUIElement, location: usize, length: usize) -> Option<String> {
+    let range = range_value(location, length)?;
+    let name = CFString::from_static_str("AXStringForRange");
+    let mut value: *const CFType = std::ptr::null();
+    let error = unsafe {
+        element.copy_parameterized_attribute_value(&name, &range, NonNull::from(&mut value))
+    };
+    if error != AXError::Success || value.is_null() {
+        return None;
+    }
+    let value = unsafe { CFRetained::from_raw(NonNull::new_unchecked(value as *mut CFType)) };
+    value.downcast_ref::<CFString>().map(|s| s.to_string())
 }
 
 fn intersect(a: CGRect, b: CGRect) -> CGRect {
@@ -464,6 +1085,39 @@ pub fn probe_children() -> String {
         }
     }
     out
+}
+
+/// The text field of app `pid` whose `AXIdentifier` (an AppKit view's
+/// identifier) or `AXDOMIdentifier` (a web element's id) is `id`. For
+/// `gramly lab`, which finds its test fields this way rather than by focus,
+/// so the test window never has to come forward.
+///
+/// With `window`, only windows whose title contains it are searched: a
+/// browser holds every open tab's page, and other pages use the same ids.
+pub fn find(pid: i32, window: Option<&str>, id: &str) -> Option<Field> {
+    let app = unsafe { AXUIElement::new_application(pid) };
+    unsafe { app.set_messaging_timeout(2.0) };
+    let mut queue = match window {
+        None => vec![(app, 0)],
+        Some(title) => children_of(&app)
+            .into_iter()
+            .filter(|w| string_attribute(w, "AXTitle").is_some_and(|t| t.contains(title)))
+            .map(|w| (w, 1))
+            .collect(),
+    };
+    while let Some((element, depth)) = queue.pop() {
+        let named = ["AXIdentifier", "AXDOMIdentifier"]
+            .into_iter()
+            .any(|name| string_attribute(&element, name).as_deref() == Some(id));
+        if named {
+            unsafe { element.set_messaging_timeout(2.0) };
+            return Some(Field::new(element));
+        }
+        if depth < 80 {
+            queue.extend(children_of(&element).into_iter().map(|c| (c, depth + 1)));
+        }
+    }
+    None
 }
 
 fn children_of(element: &AXUIElement) -> Vec<CFRetained<AXUIElement>> {

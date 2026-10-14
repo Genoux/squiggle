@@ -8,7 +8,7 @@
 mod macos;
 
 use anyhow::{Result, bail};
-use gramly_core::{Config, Local, ai, config, merge};
+use gramly_core::{Config, Local, ai, config, protect};
 use std::io::Read;
 
 fn main() -> Result<()> {
@@ -18,6 +18,10 @@ fn main() -> Result<()> {
         Some("check") => check(args.iter().any(|a| a == "--local")),
         #[cfg(target_os = "macos")]
         Some("doctor") => macos::doctor(),
+        #[cfg(target_os = "macos")]
+        Some("lab") => macos::lab(&args[1..]),
+        #[cfg(target_os = "macos")]
+        Some("lab-host") => macos::lab_host(),
         Some("--version" | "-V") => {
             println!("gramly {}", env!("CARGO_PKG_VERSION"));
             Ok(())
@@ -28,6 +32,7 @@ fn main() -> Result<()> {
                  gramly check      print suggestions for text on stdin\n\
                  gramly check --local   the on-device pass only, nothing sent\n\
                  gramly doctor     what Gramly can see in the focused field (macOS)\n\
+                 gramly lab        audit accepting fixes in real text fields, off screen (macOS)\n\
                  gramly --version"
             );
             Ok(())
@@ -52,12 +57,14 @@ fn check(local_only: bool) -> Result<()> {
     let config = Config::load()?;
     let mut local = Local::new(config.harper_dialect());
     local.set_known_words(config::dictionary());
-    let found = local.check(&text);
-    let model = match (&config.openrouter_key, config.ai && !local_only) {
-        (Some(key), true) => ai::check(key, &text)?,
-        _ => Vec::new(),
+    // What the app draws once the model has answered: the model's fixes
+    // alone, or Harper's when the model is off.
+    let fixes = match (&config.openrouter_key, config.ai && !local_only) {
+        (Some(key), true) => ai::check(key, &text, &config.dialect)?,
+        _ => local.check(&text),
     };
-    for fix in merge(found, model) {
+    let fixes = protect::keep(&text, fixes);
+    for fix in protect::keep_known(&text, fixes, &config::dictionary()) {
         println!(
             "{:>4}..{:<4} {:?} {:?} -> {:?}  {}",
             fix.start,

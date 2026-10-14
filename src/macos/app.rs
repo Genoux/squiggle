@@ -8,10 +8,12 @@
 //! millisecond and behaves the same in every app.
 
 use crate::macos::ax::{self, Field};
+use crate::macos::dictionary::Dictionary;
 use crate::macos::overlay::{self, Mark, Overlay};
 use crate::macos::paste;
+use crate::macos::write;
 use gramly_core::worker::{Outcome, Worker};
-use gramly_core::{Config, Fix, apply, config, merge, rebase, sentence};
+use gramly_core::{Config, Fix, config, merge, rebase, sentence};
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, NSObject, NSObjectProtocol};
 use objc2::{
@@ -52,6 +54,18 @@ const MODEL_LATE: Duration = Duration::from_secs(4);
 /// How long an accepted word glows green.
 const FLASH: Duration = Duration::from_millis(380);
 const VERSION: &str = env!("CARGO_PKG_VERSION");
+/// "Pause for an hour". Held in memory: a restart is a fresh start.
+const PAUSE_FOR: Duration = Duration::from_secs(60 * 60);
+/// The Spelling submenu, in the config's words and the menu's.
+const DIALECTS: &[(&str, &str)] = &[
+    ("american", "American"),
+    ("british", "British"),
+    ("canadian", "Canadian"),
+    ("australian", "Australian"),
+    ("indian", "Indian"),
+];
+/// Lines of the log "Copy recent log" takes: a few minutes of use.
+const LOG_LINES: usize = 200;
 
 struct State {
     worker: Worker,
@@ -64,9 +78,10 @@ struct State {
     local: Vec<Fix>,
     ai: Vec<Fix>,
     fixes: Vec<Fix>,
-    /// `(original, replacement)` pairs dismissed in this field. Cleared when
-    /// focus moves, as Grammarly's are.
-    dismissed: HashSet<(String, String)>,
+    /// What was dismissed, as [`dismissal`] keys it. Kept across fields and
+    /// apps until Gramly quits: cleared whenever focus moved, a suggestion
+    /// dismissed in Slack was back after a look at another window.
+    dismissed: HashSet<Dismissal>,
     /// Each drawn fix's word rectangle, Cocoa coordinates, by index into `fixes`.
     words: Vec<(usize, CGRect)>,
     hovering: Option<(usize, Instant)>,
@@ -82,6 +97,13 @@ struct State {
     card_stale: Option<CGRect>,
     /// Apps already asked to expose their text (see `ax::wake`).
     woken: HashSet<i32>,
+    /// The field's text before the last accepted fix, what it should read
+    /// after, and when it was accepted; see `audit`.
+    expecting: Option<(String, String, Instant)>,
+    /// Fixes accepted lately, as (words, replacement, when). One offered
+    /// again is logged: "the underline came back with the same correction"
+    /// was reported and never reproduced.
+    accepted: Vec<(String, String, Instant)>,
     /// Unanswered accessibility questions in a row; see `GRACE`.
     misses: u32,
     /// AI suggestions are switched on and have a key.
@@ -103,6 +125,17 @@ struct State {
     menu_enabled: Option<Retained<NSMenuItem>>,
     menu_ai: Option<Retained<NSMenuItem>>,
     menu_access: Option<Retained<NSMenuItem>>,
+    menu_pause: Option<Retained<NSMenuItem>>,
+    menu_app: Option<Retained<NSMenuItem>>,
+    menu_spelling: Vec<Retained<NSMenuItem>>,
+    /// "Pause for an hour" ends here.
+    paused_until: Option<Instant>,
+    /// The app in front (bundle id, name); see `ax::frontmost_app`.
+    front: Option<(String, String)>,
+    /// Built the first time it is opened, then kept.
+    dictionary: Option<Dictionary>,
+    /// The last snapshot written for `GRAMLY_STATE`.
+    exported: Option<String>,
 }
 
 pub struct Ivars {
@@ -121,7 +154,10 @@ define_class!(
     impl Controller {
         #[unsafe(method(tick:))]
         fn tick(&self, _timer: &AnyObject) {
-            self.with_state(|state, me| me.on_tick(state));
+            self.with_state(|state, me| {
+                me.on_tick(state);
+                export(state, me.mtm());
+            });
         }
 
         #[unsafe(method(accept:))]
@@ -143,8 +179,7 @@ define_class!(
             let tagged = tag(sender);
             self.with_state(|state, _| {
                 if let Some(fix) = shown_fix(state, tagged) {
-                    let original = fix.original(&state.text);
-                    state.dismissed.insert((original, fix.replacement.clone()));
+                    state.dismissed.insert(dismissal(&state.text, &fix));
                 }
                 state.overlay.hide_card();
                 refilter(state);
@@ -154,19 +189,21 @@ define_class!(
         #[unsafe(method(learn:))]
         fn learn(&self, sender: &AnyObject) {
             let tagged = tag(sender);
-            self.with_state(|state, _| {
+            self.with_state(|state, me| {
                 if let Some(fix) = shown_fix(state, tagged) {
                     let word = fix.original(&state.text);
                     if let Err(err) = config::add_to_dictionary(&word) {
-                        eprintln!("gramly: adding {word:?} to the dictionary: {err:#}");
+                        note!("adding {word:?} to the dictionary: {err:#}");
                     }
-                    state.dismissed.insert((word, fix.replacement.clone()));
+                    state.dismissed.insert(dismissal(&state.text, &fix));
                 }
                 state.overlay.hide_card();
                 refilter(state);
                 // Re-check so the other places that word was flagged clear too.
-                state.submitted = false;
-                state.changed_at = Instant::now() - PAUSE;
+                recheck(state);
+                if let Some(dictionary) = state.dictionary.as_mut().filter(|d| d.visible()) {
+                    dictionary.reload(me.target(), me.mtm());
+                }
             });
         }
 
@@ -195,17 +232,11 @@ define_class!(
             self.with_state(|state, _| {
                 let index = showing(state, tagged);
                 for (_, fix) in group(state, index) {
-                    let original = fix.original(&state.text);
-                    state.dismissed.insert((original, fix.replacement.clone()));
+                    state.dismissed.insert(dismissal(&state.text, &fix));
                 }
                 state.overlay.hide_card();
                 refilter(state);
             });
-        }
-
-        #[unsafe(method(acceptAll:))]
-        fn accept_all(&self, _sender: &AnyObject) {
-            self.with_state(accept_every);
         }
 
         #[unsafe(method(toggleEnabled:))]
@@ -237,17 +268,90 @@ define_class!(
             });
         }
 
+        #[unsafe(method(pauseHour:))]
+        fn pause_hour(&self, _sender: &AnyObject) {
+            self.with_state(|state, _| {
+                state.paused_until = match state.paused_until {
+                    Some(_) => None,
+                    None => Some(Instant::now() + PAUSE_FOR),
+                };
+                reset(state);
+                refresh_menu(state);
+            });
+        }
+
+        #[unsafe(method(toggleApp:))]
+        fn toggle_app(&self, _sender: &AnyObject) {
+            self.with_state(|state, _| {
+                let Some((id, _)) = state.front.clone() else {
+                    return;
+                };
+                update_config(|c| {
+                    if c.off_in.contains(&id) {
+                        c.off_in.retain(|other| *other != id);
+                    } else {
+                        c.off_in.push(id.clone());
+                    }
+                });
+                reset(state);
+                refresh_menu(state);
+            });
+        }
+
+        #[unsafe(method(setSpelling:))]
+        fn set_spelling(&self, sender: &AnyObject) {
+            let Some(&(dialect, _)) = DIALECTS.get(tag(sender)) else {
+                return;
+            };
+            update_config(|c| c.dialect = dialect.into());
+            self.with_state(|state, _| {
+                // Checked again in the new spelling.
+                reset(state);
+                refresh_menu(state);
+            });
+        }
+
+        #[unsafe(method(copyLog:))]
+        fn copy_log(&self, _sender: &AnyObject) {
+            copy_recent_log(self.mtm());
+        }
+
         #[unsafe(method(openDictionary:))]
         fn open_dictionary(&self, _sender: &AnyObject) {
-            let path = config::dictionary_path();
-            if !path.exists() {
-                if let Some(parent) = path.parent() {
-                    let _ = std::fs::create_dir_all(parent);
+            self.with_state(|state, me| {
+                let (target, mtm) = (me.target(), me.mtm());
+                state
+                    .dictionary
+                    .get_or_insert_with(|| Dictionary::new(target, mtm))
+                    .show(target, mtm);
+            });
+        }
+
+        #[unsafe(method(addWord:))]
+        fn add_word(&self, _sender: &AnyObject) {
+            self.with_state(|state, me| {
+                let changed = state
+                    .dictionary
+                    .as_mut()
+                    .is_some_and(|d| d.add(me.target(), me.mtm()));
+                if changed {
+                    recheck(state);
                 }
-                let _ = std::fs::write(&path, "# One word per line. Gramly will never flag these.\n");
-            }
-            let url = NSURL::fileURLWithPath(&NSString::from_str(&path.to_string_lossy()));
-            NSWorkspace::sharedWorkspace().openURL(&url);
+            });
+        }
+
+        #[unsafe(method(removeWord:))]
+        fn remove_word(&self, sender: &AnyObject) {
+            let index = tag(sender);
+            self.with_state(|state, me| {
+                let changed = state
+                    .dictionary
+                    .as_mut()
+                    .is_some_and(|d| d.remove(index, me.target(), me.mtm()));
+                if changed {
+                    recheck(state);
+                }
+            });
         }
 
         #[unsafe(method(grantAccess:))]
@@ -271,11 +375,18 @@ fn tag(sender: &AnyObject) -> usize {
     tag.max(0) as usize
 }
 
+/// Asks for the text to be checked again now, as if typing had just paused:
+/// after the dictionary changes, the underlines should follow at once.
+fn recheck(state: &mut State) {
+    state.submitted = false;
+    state.changed_at = Instant::now() - PAUSE;
+}
+
 fn update_config(change: impl FnOnce(&mut Config)) {
     let mut config = Config::load().unwrap_or_default();
     change(&mut config);
     if let Err(err) = config.save() {
-        eprintln!("gramly: saving settings: {err:#}");
+        note!("saving settings: {err:#}");
     }
 }
 
@@ -330,7 +441,23 @@ impl Controller {
             state.trusted = trusted;
             refresh_menu(state);
         }
-        if !config.enabled || !trusted {
+        let front = ax::frontmost_app();
+        if front.is_some() && front != state.front {
+            state.front = front;
+            refresh_menu(state);
+        }
+        if state
+            .paused_until
+            .is_some_and(|until| Instant::now() >= until)
+        {
+            state.paused_until = None;
+            refresh_menu(state);
+        }
+        let off_here = state
+            .front
+            .as_ref()
+            .is_some_and(|(id, _)| config.off_in.contains(id));
+        if !config.enabled || !trusted || state.paused_until.is_some() || off_here {
             reset(state);
             return;
         }
@@ -394,6 +521,7 @@ impl Controller {
             }
             state.overlay.hide_card();
         }
+        audit(state);
         if !state.submitted && state.changed_at.elapsed() >= PAUSE {
             state.submitted = true;
             state.submitted_at = Instant::now();
@@ -409,13 +537,20 @@ impl Controller {
                     changed = true;
                 }
                 Outcome::Ai { generation, fixes } if generation == state.generation => {
+                    let took = state.submitted_at.elapsed();
+                    if took > Duration::from_secs(2) {
+                        note!(
+                            "the model answered {:.1}s after the pause",
+                            took.as_secs_f64()
+                        );
+                    }
                     state.ai = fixes;
                     state.ai_current = true;
                     state.ai_error = None;
                     changed = true;
                 }
                 Outcome::AiFailed { reason, .. } if state.ai_error.as_deref() != Some(&reason) => {
-                    eprintln!("gramly: model check failed: {reason}");
+                    note!("model check failed: {reason}");
                     state.ai_error = Some(reason);
                     refresh_menu(state);
                 }
@@ -435,7 +570,6 @@ impl Controller {
             // Nothing left to underline - but a card still under the pointer
             // stays until the pointer leaves it.
             state.overlay.hide_marks();
-            state.overlay.hide_pill();
             if state.overlay.card_for == Some(ORPHAN) {
                 let mouse = NSEvent::mouseLocation();
                 state.overlay.hover(mouse);
@@ -575,8 +709,6 @@ impl Controller {
         }
         let area = grow(field_rect, 4.0);
         state.overlay.marks(area, marks);
-        let target = self.target();
-        state.overlay.pill(field_rect, state.fixes.len(), target);
     }
 }
 
@@ -603,6 +735,53 @@ fn grow(rect: CGRect, by: f64) -> CGRect {
     )
 }
 
+/// With `GRAMLY_STATE=<file>`, what is on screen is written there whenever
+/// it changes: the text, each fix, where its underline is drawn, and the
+/// card's rows. `gramly lab --e2e` reads it to point the mouse at a real
+/// underline and click a real button. Rectangles are in global display
+/// coordinates, top-left origin, as mouse events take them.
+fn export(state: &mut State, mtm: objc2::MainThreadMarker) {
+    let Some(path) = std::env::var_os("GRAMLY_STATE") else {
+        return;
+    };
+    // `to_cocoa` flips between the two origins, so it also flips back.
+    let rect = |r: CGRect| {
+        let r = overlay::to_cocoa(r, mtm);
+        [r.origin.x, r.origin.y, r.size.width, r.size.height]
+    };
+    let fixes: Vec<serde_json::Value> = state
+        .fixes
+        .iter()
+        .enumerate()
+        .map(|(i, fix)| {
+            serde_json::json!({
+                "start": fix.start, "end": fix.end,
+                "original": fix.original(&state.text), "replacement": fix.replacement,
+                "drawn": state.words.iter().find(|(w, _)| *w == i).map(|(_, r)| rect(*r)),
+            })
+        })
+        .collect();
+    let rows: Vec<serde_json::Value> = state
+        .overlay
+        .card_rows()
+        .into_iter()
+        .map(|(action, r)| serde_json::json!({"action": action, "rect": rect(r)}))
+        .collect();
+    let snapshot = serde_json::json!({
+        "text": state.text,
+        "field": state.field.is_some(),
+        "ai_current": state.ai_current,
+        "fixes": fixes,
+        "card": state.overlay.card_for,
+        "rows": rows,
+    })
+    .to_string();
+    if state.exported.as_deref() != Some(snapshot.as_str()) {
+        let _ = std::fs::write(&path, &snapshot);
+        state.exported = Some(snapshot);
+    }
+}
+
 fn reset(state: &mut State) {
     state.field = None;
     state.text.clear();
@@ -611,16 +790,40 @@ fn reset(state: &mut State) {
     state.ai.clear();
     state.fixes.clear();
     state.words.clear();
-    state.dismissed.clear();
     state.hovering = None;
     state.left_at = None;
     state.submitted = false;
     state.ai_current = false;
+    // Another field's text is no measure of the fix: ⌘Z there would undo
+    // something the user did.
+    state.expecting = None;
     state.generation += 1;
     state.overlay.hide_all();
 }
 
+/// A dismissed suggestion: the few words before it on its line, what it
+/// would change, and to what. The words before keep a dismissal to that
+/// place - "ok" -> "OK" dismissed once is not dismissed everywhere - and,
+/// unlike the whole sentence, they do not change as the sentence goes on
+/// being typed. Editing just before it brings the suggestion back.
+type Dismissal = (String, String, String);
+
+fn dismissal(text: &str, fix: &Fix) -> Dismissal {
+    let before: String = text.chars().take(fix.start).collect();
+    let line = before.rsplit('\n').next().unwrap_or_default();
+    let words: Vec<&str> = line.split_whitespace().collect();
+    let context = words[words.len().saturating_sub(3)..].join(" ");
+    (context, fix.original(text), fix.replacement.clone())
+}
+
+/// Dismissals kept; past this the oldest are not worth tracking, and all
+/// are forgotten at once rather than kept in order.
+const DISMISSALS: usize = 2000;
+
 fn refilter(state: &mut State) {
+    if state.dismissed.len() > DISMISSALS {
+        state.dismissed.clear();
+    }
     let text = &state.text;
     let dismissed = &state.dismissed;
     // The model read the sentence; Harper matched patterns. Harper is the
@@ -638,26 +841,20 @@ fn refilter(state: &mut State) {
     let model_coming =
         state.ai_on && state.ai_error.is_none() && state.submitted_at.elapsed() < MODEL_LATE;
     //
-    // One kind of Harper fix is kept beside the model's: a word that is not
-    // in the dictionary. That is a fact, not a judgement the model can
-    // overrule, so it is drawn at once and never withdrawn - and it catches
-    // what the model leaves alone as ambiguous ("on the wike side": wide?
-    // wild?). A name it flags goes in the dictionary from its card.
+    // Not even Harper's unknown words. Kept beside the model's, they offered
+    // "tmrw" -> "thaw" and "oldad" -> "olds": the model left the shorthand
+    // alone on purpose and fixed the typo better. An app that is wrong in
+    // plain sight is not trusted on anything else.
     let base = if state.ai_current || model_coming {
-        let unknown: Vec<Fix> = state
-            .local
-            .iter()
-            .filter(|f| f.kind == gramly_core::Kind::Spelling)
-            .cloned()
-            .collect();
-        merge(unknown, state.ai.clone())
+        state.ai.clone()
     } else {
         merge(state.local.clone(), state.ai.clone())
     };
     state.fixes = base
         .into_iter()
-        .filter(|fix| !dismissed.contains(&(fix.original(text), fix.replacement.clone())))
+        .filter(|fix| !dismissed.contains(&dismissal(text, fix)))
         .collect();
+    offered_again(state);
     if std::env::var_os("GRAMLY_TRACE").is_some() {
         let shown: Vec<String> = state
             .fixes
@@ -695,7 +892,7 @@ fn refilter(state: &mut State) {
             state.card_stale = Some(word);
         }
         None if state.overlay.card_frame().is_some() => {
-            eprintln!("gramly: card's fix withdrawn; card kept until the pointer leaves");
+            note!("card's fix withdrawn; card kept until the pointer leaves");
             state.overlay.card_for = Some(ORPHAN);
         }
         None => state.overlay.hide_card(),
@@ -727,7 +924,7 @@ pub const ORPHAN: usize = usize::MAX;
 /// "hiding for no reason" is only fixable with the reason.
 fn trace(why: &str) {
     if std::env::var_os("GRAMLY_TRACE").is_some() {
-        eprintln!("gramly: {why}");
+        note!("{why}");
     }
 }
 
@@ -796,25 +993,96 @@ fn flash(state: &mut State, indices: &[usize]) {
 /// One fix, through Accessibility if the app honours it and as a paste over a
 /// selection if it does not.
 fn accept_fix(state: &mut State, fix: &Fix) {
+    state.overlay.hide_card();
     let fix = fix.clone();
     let Some(field) = &state.field else {
         return;
     };
-    let expected = apply(&state.text, std::slice::from_ref(&fix));
-    let (location, length) = fix.utf16(&state.text);
-    if !field.replace(location, length, &fix.replacement, &expected)
-        && field.select(location, length)
-    {
-        paste::paste(&fix.replacement);
-    }
-    state.overlay.hide_card();
+    let expected = match write::one(field, &state.text, &fix) {
+        Ok(expected) => expected,
+        Err(why) => return refused(why),
+    };
+    remember(state, std::slice::from_ref(&fix));
+    state.expecting = Some((state.text.clone(), expected, Instant::now()));
 }
 
-/// Every fix in the field.
-fn accept_every(state: &mut State, _: &Controller) {
-    let all: Vec<usize> = (0..state.fixes.len()).collect();
-    flash(state, &all);
-    accept_fixes(state, &all);
+/// After an accepted fix the field should read as expected within a second.
+/// A correction that ate the user's text is the worst thing Gramly can do:
+/// a field that changed and is still `LOST` or more characters shorter than
+/// both what it held and what it should hold, once the app has had
+/// `SETTLED` to finish the paste, is taken back with ⌘Z. A sentence replaced
+/// by one word happened twice; typing in that second cannot remove that
+/// much, and a paste that is only slow leaves the field as it was. Any
+/// other mismatch is logged with its size.
+fn audit(state: &mut State) {
+    const LOST: usize = 10;
+    const SETTLED: Duration = Duration::from_millis(250);
+    let Some((before, expected, at)) = &state.expecting else {
+        return;
+    };
+    if state.text == *expected {
+        state.expecting = None;
+        return;
+    }
+    let (got, want) = (state.text.chars().count(), expected.chars().count());
+    let had = before.chars().count();
+    let wrote = state.text != *before;
+    if at.elapsed() >= SETTLED && wrote && got + LOST <= want.min(had) {
+        note!(
+            "after a fix in {} the field holds {got} chars, expected {want}; undone",
+            in_front()
+        );
+        paste::undo();
+        state.expecting = None;
+    } else if at.elapsed() >= Duration::from_secs(1) {
+        note!(
+            "after a fix in {} the field holds {got} chars, expected {want}",
+            in_front()
+        );
+        state.expecting = None;
+    }
+}
+
+/// Notes accepted fixes, for [`offered_again`].
+fn remember(state: &mut State, fixes: &[Fix]) {
+    let now = Instant::now();
+    state
+        .accepted
+        .retain(|(_, _, at)| at.elapsed() < Duration::from_secs(60));
+    for fix in fixes {
+        state
+            .accepted
+            .push((fix.original(&state.text), fix.replacement.clone(), now));
+    }
+}
+
+/// Logs a fix accepted in the last minute that is being offered again.
+fn offered_again(state: &State) {
+    for fix in &state.fixes {
+        let words = fix.original(&state.text);
+        if let Some((_, _, at)) = state.accepted.iter().find(|(was, now, at)| {
+            *was == words && *now == fix.replacement && at.elapsed() < Duration::from_secs(60)
+        }) {
+            note!(
+                "an accepted fix is offered again {:.1}s later: {words:?} -> {:?} (model answered: {})",
+                at.elapsed().as_secs_f64(),
+                fix.replacement,
+                state.ai_current
+            );
+        }
+    }
+}
+
+/// A fix not applied, and why. Logged: losing the user's text is the one
+/// thing a correction must never do, so when in doubt nothing is written.
+fn refused(why: &str) {
+    note!("fix not applied in {}: {why}", in_front());
+}
+
+/// The app in front, for the log: a fix that goes wrong in one app and not
+/// another is the first thing to know.
+fn in_front() -> String {
+    ax::frontmost_app().map_or_else(|| "?".into(), |(id, _)| id)
 }
 
 /// Several fixes at once, back to front so each write leaves the offsets of
@@ -826,65 +1094,41 @@ fn accept_fixes(state: &mut State, indices: &[usize]) {
     let Some(field) = &state.field else {
         return;
     };
-    let mut fixes: Vec<Fix> = indices
+    let fixes: Vec<Fix> = indices
         .iter()
         .filter_map(|i| state.fixes.get(*i).cloned())
         .collect();
-    fixes.sort_by_key(|f| f.start);
-    let (Some(lo), Some(hi)) = (
-        fixes.iter().map(|f| f.start).min(),
-        fixes.iter().map(|f| f.end).max(),
-    ) else {
+    if fixes.is_empty() {
         return;
-    };
-    let text = state.text.clone();
-    let corrected = apply(&text, &fixes);
-    let mut current = text.clone();
-    let mut direct = true;
-    for fix in fixes.iter().rev() {
-        let next = apply(&current, std::slice::from_ref(fix));
-        let (location, length) = fix.utf16(&current);
-        if !field.replace(location, length, &fix.replacement, &next) {
-            direct = false;
-            break;
-        }
-        current = next;
-    }
-    if !direct {
-        // Every change lies inside [lo, hi), so outside it `current`, `text`
-        // and `corrected` agree and only the span's end moves.
-        let len = |s: &str| s.chars().count() as isize;
-        let current_hi = (hi as isize + len(&current) - len(&text)) as usize;
-        let corrected_hi = (hi as isize + len(&corrected) - len(&text)) as usize;
-        let span = Fix {
-            start: lo,
-            end: current_hi,
-            replacement: String::new(),
-            kind: fixes[0].kind,
-            message: String::new(),
-            source: fixes[0].source,
-        };
-        let (location, length) = span.utf16(&current);
-        let replacement: String = corrected.chars().skip(lo).take(corrected_hi - lo).collect();
-        if field.select(location, length) {
-            paste::paste(&replacement);
-        }
     }
     state.overlay.hide_card();
+    let text = state.text.clone();
+    let corrected = match write::many(field, &text, &fixes) {
+        Ok(corrected) => corrected,
+        Err(why) => return refused(why),
+    };
+    remember(state, &fixes);
+    state.expecting = Some((text, corrected, Instant::now()));
 }
 
 fn refresh_menu(state: &mut State) {
     let config = Config::load().unwrap_or_default();
+    let front = state.front.as_ref();
+    let off_here = front.filter(|(id, _)| config.off_in.contains(id));
     let status = if !state.trusted {
         "Needs Accessibility access".to_string()
     } else if !config.enabled {
         "Paused".to_string()
+    } else if let Some(until) = state.paused_until {
+        format!("Paused until {}", clock(until))
+    } else if let Some((_, name)) = off_here {
+        format!("Off in {name}")
     } else if !config.ai || config.openrouter_key.is_none() {
         "Checking on this Mac only".to_string()
     } else if let Some(error) = &state.ai_error {
         format!("Model unavailable: {}", truncate(error, 48))
     } else {
-        "Checking with Claude Haiku 5.5".to_string()
+        "Checking with Gemini 3.5 Flash-Lite".to_string()
     };
     if let Some(item) = &state.menu_status {
         item.setTitle(&NSString::from_str(&status));
@@ -898,6 +1142,70 @@ fn refresh_menu(state: &mut State) {
     if let Some(item) = &state.menu_access {
         item.setHidden(state.trusted);
     }
+    if let Some(item) = &state.menu_pause {
+        let title = if state.paused_until.is_some() {
+            "Resume checking"
+        } else {
+            "Pause for an hour"
+        };
+        item.setTitle(&NSString::from_str(title));
+        item.setEnabled(config.enabled);
+    }
+    if let Some(item) = &state.menu_app {
+        item.setHidden(front.is_none());
+        if let Some((id, name)) = front {
+            let (title, enabled) = if ax::terminal(id) {
+                (format!("Off in {name}: terminals are skipped"), false)
+            } else if off_here.is_some() {
+                (format!("Turn on in {name}"), true)
+            } else {
+                (format!("Turn off in {name}"), true)
+            };
+            item.setTitle(&NSString::from_str(&title));
+            item.setEnabled(enabled);
+        }
+    }
+    for (item, (dialect, _)) in state.menu_spelling.iter().zip(DIALECTS) {
+        item.setState((config.dialect == *dialect) as isize);
+    }
+}
+
+/// The wall-clock time `at` will be, as the user's locale writes a time.
+fn clock(at: Instant) -> String {
+    use objc2_foundation::{NSDate, NSDateFormatter};
+    let formatter = NSDateFormatter::new();
+    formatter.setLocalizedDateFormatFromTemplate(&NSString::from_str("jmm"));
+    let seconds = at.saturating_duration_since(Instant::now()).as_secs_f64();
+    formatter
+        .stringFromDate(&NSDate::dateWithTimeIntervalSinceNow(seconds))
+        .to_string()
+}
+
+/// The end of the log on the clipboard, for a report: what went wrong is
+/// usually in the last few minutes, and finding them in the file is work.
+fn copy_recent_log(mtm: MainThreadMarker) {
+    let path = std::path::PathBuf::from(std::env::var_os("HOME").unwrap_or_default())
+        .join("Library/Logs/gramly.log");
+    let message = match std::fs::read_to_string(&path) {
+        Ok(log) => {
+            let lines: Vec<&str> = log.lines().collect();
+            let recent = lines[lines.len().saturating_sub(LOG_LINES)..].join("\n");
+            let board = objc2_app_kit::NSPasteboard::generalPasteboard();
+            board.clearContents();
+            board.setString_forType(&NSString::from_str(&recent), unsafe {
+                objc2_app_kit::NSPasteboardTypeString
+            });
+            "Copied the end of Gramly's log. Paste it into a message to report what went wrong."
+                .to_string()
+        }
+        Err(err) => format!("Could not read {}: {err}", path.display()),
+    };
+    let app = NSApplication::sharedApplication(mtm);
+    #[allow(deprecated)]
+    app.activateIgnoringOtherApps(true);
+    let alert = NSAlert::new(mtm);
+    alert.setMessageText(&NSString::from_str(&message));
+    alert.runModal();
 }
 
 fn truncate(text: &str, max: usize) -> String {
@@ -994,7 +1302,28 @@ fn build_menu(state: &mut State, controller: &Controller, mtm: MainThreadMarker)
         target,
         mtm,
     );
+    let pause = menu_item("Pause for an hour", Some(sel!(pauseHour:)), "", target, mtm);
+    let app_item = menu_item(
+        "Turn off in this app",
+        Some(sel!(toggleApp:)),
+        "",
+        target,
+        mtm,
+    );
     let ai = menu_item("AI suggestions", Some(sel!(toggleAi:)), "", target, mtm);
+    let spelling = menu_item("Spelling", None, "", target, mtm);
+    spelling.setEnabled(true);
+    let choices = NSMenu::new(mtm);
+    choices.setAutoenablesItems(false);
+    let mut spelling_items = Vec::new();
+    for (index, (_, name)) in DIALECTS.iter().enumerate() {
+        let choice = menu_item(name, Some(sel!(setSpelling:)), "", target, mtm);
+        choice.setTag(index as isize);
+        choices.addItem(&choice);
+        spelling_items.push(choice);
+    }
+    spelling.setSubmenu(Some(&choices));
+    let log = menu_item("Copy recent log", Some(sel!(copyLog:)), "", target, mtm);
     let key = menu_item("OpenRouter key…", Some(sel!(setKey:)), "", target, mtm);
     let dictionary = menu_item(
         "Personal dictionary…",
@@ -1017,10 +1346,15 @@ fn build_menu(state: &mut State, controller: &Controller, mtm: MainThreadMarker)
     menu.addItem(&access);
     menu.addItem(&NSMenuItem::separatorItem(mtm));
     menu.addItem(&enabled);
+    menu.addItem(&pause);
+    menu.addItem(&app_item);
+    menu.addItem(&NSMenuItem::separatorItem(mtm));
     menu.addItem(&ai);
     menu.addItem(&key);
+    menu.addItem(&spelling);
     menu.addItem(&dictionary);
     menu.addItem(&NSMenuItem::separatorItem(mtm));
+    menu.addItem(&log);
     menu.addItem(&about);
     menu.addItem(&quit);
     item.setMenu(Some(&menu));
@@ -1030,13 +1364,16 @@ fn build_menu(state: &mut State, controller: &Controller, mtm: MainThreadMarker)
     state.menu_enabled = Some(enabled);
     state.menu_ai = Some(ai);
     state.menu_access = Some(access);
+    state.menu_pause = Some(pause);
+    state.menu_app = Some(app_item);
+    state.menu_spelling = spelling_items;
     refresh_menu(state);
 }
 
 /// ⌘V, ⌘C, ⌘X and ⌘A are menu key equivalents, not text-field behaviour: an
 /// app with no Edit menu cannot paste into its own key dialog. Gramly shows
 /// no menu bar, but the menu still has to exist for the shortcuts to route.
-fn edit_menu(mtm: MainThreadMarker) -> Retained<NSMenu> {
+pub(crate) fn edit_menu(mtm: MainThreadMarker) -> Retained<NSMenu> {
     let main = NSMenu::new(mtm);
     let edit = NSMenu::initWithTitle(NSMenu::alloc(mtm), &NSString::from_str("Edit"));
     for (title, action, key) in [
@@ -1044,6 +1381,8 @@ fn edit_menu(mtm: MainThreadMarker) -> Retained<NSMenu> {
         ("Copy", sel!(copy:), "c"),
         ("Paste", sel!(paste:), "v"),
         ("Select All", sel!(selectAll:), "a"),
+        // The dictionary window: Gramly has no File or Window menu to carry it.
+        ("Close Window", sel!(performClose:), "w"),
     ] {
         // No target: the action goes to whatever has focus, the key field.
         let item = unsafe {
@@ -1094,6 +1433,8 @@ pub fn run() -> anyhow::Result<()> {
         flashing: None,
         card_stale: None,
         woken: HashSet::new(),
+        expecting: None,
+        accepted: Vec::new(),
         misses: 0,
         ai_on: false,
         submitted_at: Instant::now(),
@@ -1107,6 +1448,13 @@ pub fn run() -> anyhow::Result<()> {
         menu_enabled: None,
         menu_ai: None,
         menu_access: None,
+        menu_pause: None,
+        menu_app: None,
+        menu_spelling: Vec::new(),
+        paused_until: None,
+        front: None,
+        dictionary: None,
+        exported: None,
     };
     build_menu(&mut state, &controller, mtm);
     *controller.ivars().state.borrow_mut() = Some(state);
@@ -1120,8 +1468,8 @@ pub fn run() -> anyhow::Result<()> {
             true,
         )
     };
-    eprintln!(
-        "gramly {VERSION}: ready{}",
+    note!(
+        "{VERSION} ready{}",
         if trusted {
             ""
         } else {

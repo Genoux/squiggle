@@ -1,0 +1,194 @@
+#!/usr/bin/env bash
+#
+# Everything that says whether Gramly is ready to release, in one run, with
+# a report and a comparison against the run before.
+#
+#   ./sandbox            free, and never touches the screen: format, lint,
+#                        unit tests, accept-order tests, and the lab's
+#                        off-screen window (AppKit fields and Safari's engine)
+#   ./sandbox --ai       + the AI benchmark on the app's own model (cents)
+#   ./sandbox --models   + every candidate in crates/core/bench/routes.json
+#   ./sandbox --screen   + Chrome, Zen and Safari test tabs, and the real app
+#                        end to end with screenshots. Takes the screen for a
+#                        few minutes: run it with the Mac left alone.
+#   ./sandbox --all      all of it
+#
+# Report: target/sandbox/<time>/report.md (target/sandbox/latest is the last
+# one). Exits non-zero when a gate fails: a lint or test failure, any fix
+# that was refused, lost or wrong, an underline off its word, or the
+# benchmark falling below the last run.
+set -uo pipefail
+
+repo="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+cd "$repo"
+
+ai=0 models=0 screen=0
+for arg in "$@"; do
+  case "$arg" in
+    --ai) ai=1 ;;
+    --models) ai=1 models=1 ;;
+    --screen) screen=1 ;;
+    --all) ai=1 models=1 screen=1 ;;
+    -h|--help) sed -n '2,/^set -uo/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) echo "unknown option $arg (try --help)"; exit 2 ;;
+  esac
+done
+
+stamp="$(date +%Y%m%d-%H%M%S)"
+out="$repo/target/sandbox/$stamp"
+previous="$(readlink -f "$repo/target/sandbox/latest" 2>/dev/null || true)"
+mkdir -p "$out"
+: > "$out/steps.tsv"
+
+# One step: its output to <name>.txt, its status and seconds to steps.tsv.
+step() {
+  local name="$1"; shift
+  local started=$SECONDS
+  printf '%-10s ' "$name"
+  "$@" > "$out/$name.txt" 2>&1
+  local status=$?
+  printf '%s\t%s\t%s\n' "$name" "$status" "$((SECONDS - started))" >> "$out/steps.tsv"
+  if [ $status = 0 ]; then echo "ok ($((SECONDS - started))s)"; else echo "FAILED ($((SECONDS - started))s), see $out/$name.txt"; fi
+  return $status
+}
+
+key() {
+  sed -n 's/^openrouter_key *= *"\{0,1\}\([^"]*\)"\{0,1\} *$/\1/p' "$HOME/.config/gramly/config.toml" 2>/dev/null
+}
+
+step build   cargo build --workspace --all-targets
+step fmt     cargo fmt --all --check
+step clippy  cargo clippy --workspace --all-targets -- -D warnings
+step tests   cargo test --workspace
+step lab     cargo run -q -- lab && cp target/lab/last.json "$out/lab.json"
+
+if [ $ai = 1 ]; then
+  if [ -z "$(key)" ]; then
+    echo "bench      skipped: no OpenRouter key in ~/.config/gramly/config.toml"
+  else
+    step bench cargo run --release -q -p gramly-core --example bench -- --app --runs 3 \
+      && cp target/bench/last.json "$out/bench.json"
+    if [ $models = 1 ]; then
+      step models cargo run --release -q -p gramly-core --example bench -- --runs 2 \
+        && cp target/bench/last.json "$out/models.json"
+    fi
+  fi
+fi
+
+if [ $screen = 1 ]; then
+  echo "screen     the next few minutes use the screen: leave the Mac alone"
+  for left in 5 4 3 2 1; do printf '\r           starting in %s ' "$left"; sleep 1; done; echo
+  step browsers cargo run -q -- lab --browser chrome,zen,safari \
+    && cp target/lab/last.json "$out/browsers.json"
+  step e2e cargo run -q -- lab --e2e --shots "$out/shots" \
+    && cp target/lab/e2e.json "$out/e2e.json"
+fi
+
+ln -sfn "$out" "$repo/target/sandbox/latest"
+python3 - "$out" "$previous" <<'PY'
+import json, os, sys
+
+out, previous = sys.argv[1], sys.argv[2]
+
+def load(folder, name):
+    try:
+        with open(os.path.join(folder, name)) as f:
+            return json.load(f)
+    except (OSError, ValueError, TypeError):
+        return None
+
+steps = []
+with open(os.path.join(out, "steps.tsv")) as f:
+    for line in f:
+        name, status, seconds = line.rstrip("\n").split("\t")
+        steps.append((name, int(status), int(seconds)))
+
+failures = []
+lines = ["# Gramly sandbox", "", f"Run `{os.path.basename(out)}`" +
+         (f", compared with `{os.path.basename(previous)}`." if previous else ", the first one."), ""]
+
+lines += ["## Steps", "", "| step | result | time |", "|---|---|---|"]
+for name, status, seconds in steps:
+    lines.append(f"| {name} | {'ok' if status == 0 else '**failed**'} | {seconds}s |")
+    if status != 0:
+        failures.append(f"{name} failed (see {name}.txt)")
+lines.append("")
+
+def fields(title, rows):
+    lines.extend([f"## {title}", "",
+                  "| app | field | placed | exact | refused | lost | WRONG | shown | ax lag |",
+                  "|---|---|---|---|---|---|---|---|---|"])
+    for r in rows:
+        total = r.get("placed", 0) + r.get("misplaced", 0) + r.get("unplaced", 0)
+        accepts = sum(r.get(k, 0) for k in ("exact", "refused", "lost", "wrong"))
+        lines.append(
+            f"| {r.get('app', '')} | {r['label']} | {r['placed']}/{total} | {r['exact']}/{accepts} "
+            f"| {r['refused']} | {r.get('lost', 0)} | {r['wrong']} | {r['p50_ms']}ms | {r.get('ax_lag_p90_ms', 0)}ms |")
+        where = f"{r.get('app', '')} {r['label']}".strip()
+        for key, what in (("wrong", "wrong"), ("lost", "lost"), ("refused", "refused"),
+                          ("misplaced", "misplaced underlines"), ("broken", "cases that could not run")):
+            if r.get(key, 0):
+                failures.append(f"{where}: {r[key]} {what}")
+        if accepts == 0 and r.get("cases"):
+            failures.append(f"{where}: no accepts ran")
+    lines.append("")
+
+for name, title in (("lab.json", "Lab window (off screen)"), ("browsers.json", "Browsers")):
+    rows = load(out, name)
+    if rows:
+        fields(title, rows)
+
+def bench(name, title, gate):
+    rows = load(out, name)
+    if not rows:
+        return
+    before = {r["route"]: r for r in (load(previous, name) or [])} if previous else {}
+    lines.extend([f"## {title}", "",
+                  "| route | F0.5 | precision | exact | same | p95 | $/1k | spent | vs last F0.5 |",
+                  "|---|---|---|---|---|---|---|---|---|"])
+    for r in rows:
+        spent = (r["cost_per_1k"] or 0) / 1000 * r["cases"] * r["runs"]
+        last = before.get(r["route"])
+        delta = f"{r['f05'] - last['f05']:+.3f}" if last else "-"
+        lines.append(
+            f"| {r['route']} | {r['f05']:.3f} | {r['precision']:.2f} | {r['exact']*100:.0f}% "
+            f"| {r['same']*100:.0f}% | {r['p95']:.1f}s | {r['cost_per_1k'] or 0:.3f} | ${spent:.3f} | {delta} |")
+        if gate:
+            # A dropped call now and then is the network, and the app falls
+            # back to Harper for it; more than 2% is a provider problem.
+            if r["failed"] > 0.02 * r["cases"] * r["runs"]:
+                failures.append(f"benchmark: {r['failed']} failed calls")
+            if r["precision"] < 0.93:
+                failures.append(f"benchmark: precision {r['precision']:.2f} under 0.93")
+            if r["p95"] > 2.5:
+                failures.append(f"benchmark: p95 {r['p95']:.1f}s over 2.5s")
+            if last and r["f05"] < last["f05"] - 0.02:
+                failures.append(f"benchmark: F0.5 fell {last['f05']:.3f} -> {r['f05']:.3f}")
+    lines.append("")
+
+bench("bench.json", "AI benchmark, the app's model", True)
+bench("models.json", "AI candidates", False)
+
+e2e = load(out, "e2e.json")
+if e2e:
+    lines.extend(["## End to end, the real app", ""])
+    for case in e2e:
+        mark = "ok" if case["ok"] else "**failed**"
+        lines.append(f"- {case['app']} · {case['name']}: {mark}. {case['detail']}")
+        for shot in case.get("shots", []):
+            lines.append(f"  - ![{os.path.basename(shot)}]({os.path.relpath(shot, out)})")
+        if not case["ok"]:
+            failures.append(f"end to end {case['app']} {case['name']}: {case['detail']}")
+    lines.append("")
+
+lines.insert(4, ("**Ready.** Every gate passed." if not failures else
+                 "**Not ready.**\n\n" + "\n".join(f"- {f}" for f in failures)) + "\n")
+with open(os.path.join(out, "report.md"), "w") as f:
+    f.write("\n".join(lines))
+print()
+print("READY" if not failures else "NOT READY")
+for f in failures:
+    print(f"  - {f}")
+print(f"report: {os.path.join(out, 'report.md')}")
+sys.exit(1 if failures else 0)
+PY

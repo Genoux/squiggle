@@ -1,7 +1,8 @@
-//! What Gramly draws on top of other apps: underlines, the suggestion card,
-//! and the Accept-all pill.
+//! What Gramly draws on top of other apps: underlines and the suggestion
+//! card. There is no Accept-all pill: Grammarly has none, and a badge in
+//! the corner of every field was noise.
 //!
-//! All three are non-activating panels. Clicking Accept must not take focus
+//! Both are non-activating panels. Clicking Accept must not take focus
 //! away from the field being corrected - an activating window would, the
 //! caret would leave the text, and the user would have to click back in to
 //! keep typing. The underline panel also ignores the mouse entirely, so
@@ -56,6 +57,22 @@ pub fn to_cocoa(rect: CGRect, mtm: MainThreadMarker) -> CGRect {
     )
 }
 
+/// The usable part (no menu bar, no Dock) of the screen a rectangle is on,
+/// in Cocoa coordinates; the main screen's when it is on none.
+fn screen_around(rect: CGRect, mtm: MainThreadMarker) -> CGRect {
+    let middle = CGPoint::new(
+        rect.origin.x + rect.size.width / 2.0,
+        rect.origin.y + rect.size.height / 2.0,
+    );
+    let screens = NSScreen::screens(mtm);
+    screens
+        .iter()
+        .find(|screen| contains(screen.frame(), middle))
+        .or_else(|| NSScreen::mainScreen(mtm))
+        .map(|screen| screen.visibleFrame())
+        .unwrap_or(rect)
+}
+
 pub fn contains(rect: CGRect, point: CGPoint) -> bool {
     point.x >= rect.origin.x
         && point.x <= rect.origin.x + rect.size.width
@@ -84,7 +101,7 @@ fn panel(mtm: MainThreadMarker, interactive: bool) -> Retained<NSPanel> {
     panel.setBackgroundColor(Some(&NSColor::clearColor()));
     panel.setHasShadow(interactive);
     panel.setIgnoresMouseEvents(!interactive);
-    // The card and pill sit one level above the underlines, so a line from
+    // The card sits one level above the underlines, so a line from
     // the text under the card never crosses it. Not `setFloatingPanel`: it
     // resets the level to NSFloatingWindowLevel, which put every panel on
     // one level and drew underlines over the card whenever they redrew last.
@@ -168,8 +185,6 @@ pub struct Overlay {
     /// The card's hoverable rows, and which one the pointer is over.
     rows: Vec<Row>,
     lit: Option<usize>,
-    pill: Retained<NSPanel>,
-    pill_count: usize,
 }
 
 impl Overlay {
@@ -182,8 +197,6 @@ impl Overlay {
             card_for: None,
             rows: Vec::new(),
             lit: None,
-            pill: panel(mtm, true),
-            pill_count: 0,
         }
     }
 
@@ -199,7 +212,7 @@ impl Overlay {
             return;
         }
         if std::env::var_os("GRAMLY_TRACE").is_some() {
-            eprintln!("gramly: drawing {} underlines in {area:?}", marks.len());
+            note!("drawing {} underlines in {area:?}", marks.len());
         }
         let Some(root) = self.marks_panel.contentView().and_then(|v| v.layer()) else {
             return;
@@ -249,6 +262,28 @@ impl Overlay {
         self.drawn.clear();
     }
 
+    /// The card's rows as (action, frame on screen in Cocoa coordinates),
+    /// for `GRAMLY_STATE`.
+    pub fn card_rows(&self) -> Vec<(String, CGRect)> {
+        if !self.card.isVisible() {
+            return Vec::new();
+        }
+        let origin = self.card.frame().origin;
+        self.rows
+            .iter()
+            .map(|row| {
+                let f = row.view.frame();
+                (
+                    row.action.name().to_string_lossy().into_owned(),
+                    CGRect::new(
+                        CGPoint::new(origin.x + f.origin.x, origin.y + f.origin.y),
+                        f.size,
+                    ),
+                )
+            })
+            .collect()
+    }
+
     pub fn card_frame(&self) -> Option<CGRect> {
         self.card.isVisible().then(|| self.card.frame())
     }
@@ -287,9 +322,18 @@ impl Overlay {
         // to fall into.
         let gap = 4.0;
         let mut origin = CGPoint::new(word.origin.x - 12.0, word.origin.y - gap - size.height);
-        if origin.y < 0.0 {
-            origin.y = word.origin.y + word.size.height + gap;
+        // Kept on the word's screen: a word near the right edge of a Slack
+        // window put the sentence card half off it. Shifted sideways rather
+        // than flipped, so it stays close to the word; above the word only
+        // when there is no room below.
+        const MARGIN: f64 = 8.0;
+        let area = screen_around(word, self.mtm);
+        let (low, high) = (area.origin.y, area.origin.y + area.size.height);
+        if origin.y < low + MARGIN {
+            origin.y = (word.origin.y + word.size.height + gap).min(high - size.height - MARGIN);
         }
+        let right = area.origin.x + area.size.width - size.width - MARGIN;
+        origin.x = origin.x.min(right).max(area.origin.x + MARGIN);
         self.card.setFrame_display(CGRect::new(origin, size), true);
         self.card.orderFrontRegardless();
         self.card_for = Some(index);
@@ -333,91 +377,9 @@ impl Overlay {
         self.lit = now;
     }
 
-    /// "3 fixes · Accept all", tucked inside the field's bottom-right corner
-    /// the way Grammarly's badge sits.
-    pub fn pill(&mut self, field: CGRect, count: usize, target: &AnyObject) {
-        if count == 0 {
-            self.hide_pill();
-            return;
-        }
-        let mtm = self.mtm;
-        let height = 26.0;
-        if count != self.pill_count || !self.pill.isVisible() {
-            let title = if count == 1 {
-                "1 fix · Accept".to_string()
-            } else {
-                format!("{count} fixes · Accept all")
-            };
-            let accept = unsafe {
-                NSButton::buttonWithTitle_target_action(
-                    &NSString::from_str(&title),
-                    Some(target),
-                    Some(objc2::sel!(acceptAll:)),
-                    mtm,
-                )
-            };
-            accept.setBordered(false);
-            accept.setAttributedTitle(&styled(&[Run {
-                text: &title,
-                color: theme::TEXT,
-                size: 12.0,
-                weight: unsafe { NSFontWeightMedium },
-                struck: false,
-            }]));
-            let width = accept.fittingSize().width + 30.0;
-            let view = NSView::initWithFrame(
-                NSView::alloc(mtm),
-                CGRect::new(CGPoint::new(0.0, 0.0), CGSize::new(width, height)),
-            );
-            view.setWantsLayer(true);
-            accept.setFrame(CGRect::new(
-                CGPoint::new(18.0, 0.0),
-                CGSize::new(width - 24.0, height),
-            ));
-            still(|| {
-                if let Some(layer) = view.layer() {
-                    surface(&layer, height / 2.0);
-                    let dot = CALayer::new();
-                    dot.setFrame(CGRect::new(
-                        CGPoint::new(11.0, height / 2.0 - 3.0),
-                        CGSize::new(6.0, 6.0),
-                    ));
-                    dot.setCornerRadius(3.0);
-                    dot.setBackgroundColor(Some(&theme::cg(theme::ACCENT)));
-                    layer.addSublayer(&dot);
-                }
-                view.addSubview(&accept);
-            });
-            self.pill.setContentView(Some(&view));
-            self.pill_count = count;
-        }
-        let width = self
-            .pill
-            .contentView()
-            .map(|v| v.frame().size.width)
-            .unwrap_or(120.0);
-        let origin = CGPoint::new(
-            field.origin.x + field.size.width - width - 8.0,
-            field.origin.y + 6.0,
-        );
-        let frame = CGRect::new(origin, CGSize::new(width, height));
-        if self.pill.frame() != frame || !self.pill.isVisible() {
-            self.pill.setFrame_display(frame, true);
-            self.pill.orderFrontRegardless();
-        }
-    }
-
-    pub fn hide_pill(&mut self) {
-        if self.pill.isVisible() {
-            self.pill.orderOut(None);
-        }
-        self.pill_count = 0;
-    }
-
     pub fn hide_all(&mut self) {
         self.hide_marks();
         self.hide_card();
-        self.hide_pill();
     }
 }
 
@@ -428,6 +390,8 @@ struct Row {
     view: Retained<NSView>,
     rest: theme::Rgba,
     hover: theme::Rgba,
+    /// What clicking it does ("accept:", "dismiss:"), for `GRAMLY_STATE`.
+    action: Sel,
 }
 
 const CLEAR: theme::Rgba = theme::Rgba {
@@ -467,7 +431,13 @@ fn row(
     cover.setTransparent(true);
     cover.setFrame(CGRect::new(CGPoint::new(0.0, 0.0), frame.size));
     // Added last by `finish`, so it sits above the row's content.
-    Row { view, rest, hover }.with_cover(cover)
+    Row {
+        view,
+        rest,
+        hover,
+        action,
+    }
+    .with_cover(cover)
 }
 
 impl Row {
@@ -552,9 +522,21 @@ fn word_card(
     let medium = unsafe { NSFontWeightMedium };
     let bold = unsafe { NSFontWeightSemibold };
 
+    let original = fix.original(text);
+    // A doubled space's replacement is one space: shown as it is, the card's
+    // main line was blank, an empty box under the title.
+    // Only when the fix removes spaces and adds nothing else: spaces turned
+    // into ", " are shown as the word with its comma, not as a removal.
+    let spacing = !original.is_empty()
+        && original.chars().all(char::is_whitespace)
+        && fix.replacement.chars().all(char::is_whitespace);
     let heading = label(
         &[Run {
-            text: &title(fix),
+            text: &if spacing {
+                "Correct your spacing".to_string()
+            } else {
+                title(fix)
+            },
             color: theme::MUTED,
             size: 13.0,
             weight: regular,
@@ -563,8 +545,9 @@ fn word_card(
         mtm,
     );
     heading.setLineBreakMode(NSLineBreakMode::ByTruncatingTail);
-    let original = fix.original(text);
-    let shown = if fix.replacement.is_empty() {
+    let shown = if spacing {
+        "Remove the extra space".to_string()
+    } else if fix.replacement.is_empty() {
         format!("Remove “{original}”")
     } else {
         fix.replacement.clone()

@@ -211,7 +211,12 @@ fn line_fixes(original: &str, corrected: &str) -> Vec<Fix> {
         // before it along ("think" → "think?"), or after it at the start.
         // Spacing stays on the spaces: attached to the word before, it
         // overlapped that word's own spelling fix and replaced it.
-        if a_lo == a_hi {
+        //
+        // Spaces turned into punctuation ("yes  was" → "yes, was") are an
+        // insertion too. Left on the spaces, the card read "Remove the extra
+        // space" and never showed the comma it added.
+        let punctuating = a_lo < a_hi && a[a_lo..a_hi].iter().all(Token::space) && !spacing;
+        if a_lo == a_hi || punctuating {
             if let Some(prev) = (0..a_lo).rev().find(|&k| !a[k].space()) {
                 b_lo -= a_lo - prev;
                 a_lo = prev;
@@ -256,10 +261,111 @@ fn line_fixes(original: &str, corrected: &str) -> Vec<Fix> {
     out
 }
 
+/// The model's fixes in their final form, by two rules it keeps only most
+/// of the time:
+///
+/// - A fix to a sentence's first word gives it its capital. Asked about
+///   "thi is th teste for me!", the model answered "thi" -> "This" one run
+///   in three and "this" the others; accepted, "this" was then offered as
+///   "This" - a second fix on top of the first. Grammarly offers "This"
+///   once. Only a first word written all in lowercase is raised, so
+///   "iPhone" stays as it is.
+/// - An exclamation mark is never a mistake: a fix that only turns "!"
+///   into another end mark is dropped. The model offered "!" -> "." on a
+///   finished line.
+/// - An ellipsis is never added. On a sentence still being typed the model
+///   turned "congelationÉ" into "congelation..." two runs in three; the
+///   fix keeps "congelation", and one left with nothing to change goes.
+pub fn final_form(text: &str, fixes: Vec<Fix>) -> Vec<Fix> {
+    let chars: Vec<char> = text.chars().collect();
+    fixes
+        .into_iter()
+        .filter_map(|mut fix| {
+            let original = fix.original(text);
+            for dots in ["...", "…"] {
+                if fix.replacement.ends_with(dots) && !original.ends_with(dots) {
+                    fix.replacement.truncate(fix.replacement.len() - dots.len());
+                    (fix.kind, fix.message) = classify(&original, &fix.replacement);
+                }
+            }
+            (fix.replacement != original).then_some(fix)
+        })
+        .filter(|fix| {
+            let original = fix.original(text);
+            let swapped = original.trim_end().ends_with('!')
+                && original.trim_end_matches('!') == fix.replacement.trim_end_matches(['.', '?']);
+            !swapped
+        })
+        .map(|mut fix| {
+            if starts_sentence(&chars, fix.start) {
+                let first: String = fix
+                    .replacement
+                    .chars()
+                    .take_while(|c| c.is_alphanumeric() || *c == '\'')
+                    .collect();
+                if first.chars().next().is_some_and(char::is_lowercase)
+                    && !first.chars().any(char::is_uppercase)
+                {
+                    let mut letters = fix.replacement.chars();
+                    let head = letters.next().expect("a first letter");
+                    fix.replacement = head.to_uppercase().chain(letters).collect();
+                }
+            }
+            fix
+        })
+        .collect()
+}
+
+/// Whether `at` is where a sentence starts: the start of the text or of a
+/// line, or after a full stop, question or exclamation mark and a space.
+/// Not after a list marker: Grammarly leaves list items' case alone.
+fn starts_sentence(chars: &[char], at: usize) -> bool {
+    let mut i = at;
+    let mut spaced = false;
+    while i > 0 && matches!(chars[i - 1], ' ' | '\t' | '\u{a0}') {
+        i -= 1;
+        spaced = true;
+    }
+    i == 0 || chars[i - 1] == '\n' || spaced && matches!(chars[i - 1], '.' | '!' | '?' | '…')
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::fix::apply;
+
+    #[test]
+    fn a_first_word_is_offered_with_its_capital() {
+        let text = "thi is th teste for me! wat now. see iphone";
+        let found = final_form(
+            text,
+            fixes(text, "this is the test for me! what now. see iPhone"),
+        );
+        assert_eq!(
+            apply(text, &found),
+            "This is the test for me! What now. see iPhone"
+        );
+        let text = "iphone is great";
+        let found = final_form(text, fixes(text, "iPhone is great"));
+        assert_eq!(apply(text, &found), "iPhone is great");
+    }
+
+    #[test]
+    fn an_exclamation_mark_is_never_a_mistake() {
+        let text = "This is the test for me!\n";
+        assert!(final_form(text, fixes(text, "This is the test for me.\n")).is_empty());
+        let text = "wow!!\n";
+        assert!(final_form(text, fixes(text, "wow.\n")).is_empty());
+    }
+
+    #[test]
+    fn an_ellipsis_is_never_added() {
+        let text = "fermentation or congelationÉ";
+        let found = final_form(text, fixes(text, "fermentation or congelation..."));
+        assert_eq!(apply(text, &found), "fermentation or congelation");
+        let text = "so I was thinking";
+        assert!(final_form(text, fixes(text, "so I was thinking…")).is_empty());
+    }
 
     fn round_trip(original: &str, corrected: &str) -> Vec<Fix> {
         let found = fixes(original, corrected);
@@ -323,6 +429,15 @@ mod tests {
         let found = round_trip(text, "on the wike side");
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].original(text), "  ");
+    }
+
+    #[test]
+    fn spaces_turned_into_a_comma_take_the_word_before() {
+        let text = "Hey yes  was about to say";
+        let found = round_trip(text, "Hey yes, was about to say");
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].original(text), "yes  ");
+        assert_eq!(found[0].replacement, "yes, ");
     }
 
     #[test]

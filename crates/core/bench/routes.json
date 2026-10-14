@@ -1,0 +1,18 @@
+[
+  {"model": "anthropic/claude-haiku-5.5", "provider": "anthropic", "reasoning": "low"},
+  {"model": "anthropic/claude-haiku-5.5", "provider": "anthropic", "reasoning": "none"},
+  {"model": "anthropic/claude-sonnet-5.5", "provider": "anthropic", "reasoning": "low"},
+  {"model": "openai/gpt-6-luna", "provider": "openai", "reasoning": "low"},
+  {"model": "openai/gpt-6-luna", "provider": "openai", "reasoning": "none"},
+  {"model": "openai/gpt-6-luna-pro", "provider": "openai", "reasoning": "low"},
+  {"model": "google/gemini-3.5-flash-lite", "provider": "google-ai-studio", "reasoning": "low"},
+  {"model": "google/gemini-3.5-flash-lite", "provider": "google-ai-studio", "reasoning": "minimal"},
+  {"model": "google/gemini-3.8-flash", "provider": "google-ai-studio", "reasoning": "low"},
+  {"model": "deepseek/deepseek-v4.1-flash", "provider": "deepinfra", "reasoning": "none"},
+  {"model": "qwen/qwen3.8-flash", "provider": "alibaba", "reasoning": "none"},
+  {"model": "xiaomi/mimo-v2.6-flash", "provider": "deepinfra", "reasoning": "none"},
+  {"model": "inception/mercury-2.5", "provider": "inception", "reasoning": "none"},
+  {"model": "z-ai/glm-5.3-flash", "provider": "fireworks", "reasoning": "low"},
+  {"model": "nvidia/nemotron-3.5-lightning", "provider": "deepinfra", "reasoning": "none"},
+  {"model": "upstage/solar-mini4", "provider": "upstage"}
+]

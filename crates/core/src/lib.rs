@@ -10,6 +10,7 @@ pub mod diff;
 pub mod fix;
 pub mod lang;
 pub mod local;
+pub mod protect;
 pub mod router;
 pub mod worker;
 

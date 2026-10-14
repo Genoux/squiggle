@@ -12,7 +12,7 @@
 
 use crate::config::{self, Config};
 use crate::fix::Fix;
-use crate::{Local, ai};
+use crate::{Local, ai, protect};
 use std::collections::HashMap;
 use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
 
@@ -112,7 +112,7 @@ fn local_loop(rx: Receiver<Request>, ai: Sender<Request>, out: Sender<Outcome>) 
         }
         let checker = local.as_mut().expect("built above");
         checker.set_known_words(config::dictionary());
-        let fixes = checker.check(&request.text);
+        let fixes = protect::keep(&request.text, checker.check(&request.text));
         let _ = out.send(Outcome::Local {
             generation: request.generation,
             fixes,
@@ -125,6 +125,7 @@ fn local_loop(rx: Receiver<Request>, ai: Sender<Request>, out: Sender<Outcome>) 
 
 fn ai_loop(rx: Receiver<Request>, out: Sender<Outcome>) {
     let mut cache: HashMap<String, Vec<Fix>> = HashMap::new();
+    let mut cached_dialect = String::new();
     let mut pending: Option<Request> = None;
     loop {
         let first = match pending.take() {
@@ -136,9 +137,15 @@ fn ai_loop(rx: Receiver<Request>, out: Sender<Outcome>) {
         };
         let request = newest(first, &rx);
         let config = Config::load().unwrap_or_default();
-        let Some(key) = config.openrouter_key.filter(|_| config.ai) else {
+        let Some(key) = config.openrouter_key.clone().filter(|_| config.ai) else {
             continue;
         };
+        // An answer is only as good as the spelling it was asked in.
+        if config.dialect != cached_dialect {
+            cache.clear();
+            cached_dialect = config.dialect.clone();
+        }
+        let dialect = config.dialect.as_str();
 
         // Each paragraph is asked with its line break when it has one, which
         // is how the model knows it is finished (see `ai::FINISHED`). The
@@ -168,7 +175,7 @@ fn ai_loop(rx: Receiver<Request>, out: Sender<Outcome>) {
                     .iter()
                     .map(|p| {
                         let key = &key;
-                        scope.spawn(move || (p.to_string(), ai::check(key, p)))
+                        scope.spawn(move || (p.to_string(), ai::check(key, p, dialect)))
                     })
                     .collect();
                 handles
@@ -218,9 +225,10 @@ fn ai_loop(rx: Receiver<Request>, out: Sender<Outcome>) {
                 }));
             }
         }
+        let fixes = protect::keep(&request.text, fixes);
         let _ = out.send(Outcome::Ai {
             generation: request.generation,
-            fixes,
+            fixes: protect::keep_known(&request.text, fixes, &config::dictionary()),
         });
     }
 }

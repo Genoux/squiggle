@@ -28,7 +28,7 @@ that is misbehaving, and read what it says.
 ## Only spelling is caught, never the subtler mistakes
 
 AI suggestions need a key: menu → *OpenRouter key…*. The first menu line says
-*Checking with Claude Haiku 5.5* when it is working, or the reason when it is not.
+*Checking with Gemini 3.5 Flash-Lite* when it is working, or the reason when it is not.
 
 ## Accept does nothing, or pastes something else
 

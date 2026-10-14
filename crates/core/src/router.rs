@@ -14,11 +14,40 @@ use std::time::Duration;
 
 const API: &str = "https://openrouter.ai/api/v1";
 
-/// Pinned to the provider it was measured against. A silent reroute to
-/// another host serving the same id is a different machine, and the prompt
-/// was tuned against this one.
-pub const MODEL: &str = "anthropic/claude-haiku-5.5";
-const PROVIDER: &str = "anthropic";
+/// Which model answers, on which host, thinking how hard. Pinned to the
+/// host it was measured against: a silent reroute to another host serving
+/// the same id is a different machine, and the prompt was tuned against
+/// this one. The app uses [`Route::default`]; the benchmark
+/// (`examples/bench.rs`) tries others.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct Route {
+    pub model: String,
+    /// An OpenRouter provider slug ("anthropic", "google-ai-studio").
+    pub provider: String,
+    /// "low", "medium" or "high"; "none" turns reasoning off; absent sends
+    /// nothing and leaves the model's default.
+    #[serde(default)]
+    pub reasoning: Option<String>,
+}
+
+impl Default for Route {
+    fn default() -> Self {
+        // Chosen by `examples/bench.rs` (2026-10-13, 60 cases, 3 runs, three
+        // passes): as precise as Haiku 5.5 or more, the same F0.5, and a
+        // slowest 5% of 1.2-1.5s against Haiku's 3.2-3.7s.
+        Self {
+            model: "google/gemini-3.5-flash-lite".into(),
+            provider: "google-ai-studio".into(),
+            reasoning: Some("low".into()),
+        }
+    }
+}
+
+/// A reply and what it cost, in dollars, when OpenRouter says.
+pub struct Answer {
+    pub value: serde_json::Value,
+    pub cost: Option<f64>,
+}
 
 /// One structured request: `schema` is a JSON Schema the reply must satisfy.
 pub fn structured(
@@ -28,11 +57,23 @@ pub fn structured(
     schema: &serde_json::Value,
     timeout: Duration,
 ) -> Result<serde_json::Value> {
-    let body = serde_json::json!({
-        "model": MODEL,
+    structured_on(&Route::default(), key, system, user, schema, timeout).map(|a| a.value)
+}
+
+/// [`structured`], on any route.
+pub fn structured_on(
+    route: &Route,
+    key: &str,
+    system: &str,
+    user: &str,
+    schema: &serde_json::Value,
+    timeout: Duration,
+) -> Result<Answer> {
+    let mut body = serde_json::json!({
+        "model": route.model,
         "max_tokens": 2048,
-        "reasoning": {"effort": "low"},
-        "provider": {"only": [PROVIDER], "allow_fallbacks": false},
+        "provider": {"only": [route.provider], "allow_fallbacks": false},
+        "usage": {"include": true},
         "response_format": {
             "type": "json_schema",
             "json_schema": {"name": "edits", "strict": true, "schema": schema},
@@ -42,9 +83,17 @@ pub fn structured(
             {"role": "user", "content": user},
         ],
     });
+    match route.reasoning.as_deref() {
+        None => {}
+        Some("none") => body["reasoning"] = serde_json::json!({"enabled": false}),
+        Some(effort) => body["reasoning"] = serde_json::json!({"effort": effort}),
+    }
     let reply = post(key, "/chat/completions", &body.to_string(), timeout)?;
     let content = parse_chat(&reply)?;
-    serde_json::from_str(&content).context("the model's reply is not the JSON it was asked for")
+    let cost = reply.pointer("/usage/cost").and_then(|c| c.as_f64());
+    let value = serde_json::from_str(&content)
+        .context("the model's reply is not the JSON it was asked for")?;
+    Ok(Answer { value, cost })
 }
 
 /// The reply's text, or why there isn't one. A truncated reply is a failure:

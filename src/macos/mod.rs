@@ -1,10 +1,22 @@
+/// A line in `~/Library/Logs/gramly.log`, with the time: "it happened
+/// again" can only be matched to a log line that says when.
+macro_rules! note {
+    ($($arg:tt)*) => {
+        $crate::macos::note_line(&format!($($arg)*))
+    };
+}
+
 mod app;
 mod ax;
+mod dictionary;
+mod lab;
 mod overlay;
 mod paste;
 mod theme;
+mod write;
 
 pub use app::run;
+pub use lab::{host as lab_host, run as lab};
 
 /// What Gramly can see right now, for TROUBLESHOOTING.md. Waits a moment so
 /// there is time to click into the field in question.
@@ -66,4 +78,12 @@ pub fn doctor() -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+pub(crate) fn note_line(message: &str) {
+    use objc2_foundation::{NSDate, NSDateFormatter, NSString};
+    let formatter = NSDateFormatter::new();
+    formatter.setDateFormat(Some(&NSString::from_str("yyyy-MM-dd HH:mm:ss.SSS")));
+    let now = formatter.stringFromDate(&NSDate::now());
+    eprintln!("{now} gramly: {message}");
 }

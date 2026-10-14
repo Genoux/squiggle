@@ -19,18 +19,17 @@ writer's voice intact, and a monthly cost the user never thinks about.
 
 ## Positioning
 
-Grammarly's interaction - underline, card, accept, accept all - without the
+Grammarly's interaction - underline, card, accept - without the
 account, the subscription, or the rewriting. Spelling and grammar are checked
 on the machine; the model is the user's own key, asked for small edits, and
 told to keep their voice.
 
 ## Operating Context
 
-Three surfaces, all drawn over other apps and none of them a window to switch to:
+Two surfaces, both drawn over other apps and none of them a window to switch to:
 
 - **Underlines** - red for mistakes, blue for clarity, drawn under the words.
 - **The card** - on hover: the change, why, Accept / Dismiss / Add to dictionary.
-- **The pill** - in the field's corner: the count and Accept all.
 
 The menu bar icon holds the switches. No Dock icon.
 
@@ -40,7 +39,7 @@ The menu bar icon holds the switches. No Dock icon.
 
 - Check the focused field on every pause in typing, locally first, then with the model.
 - Apply one fix or all of them without taking focus from the field.
-- Learn words; dismiss a suggestion for the rest of that field.
+- Learn words; dismiss a suggestion, and it stays dismissed after switching apps.
 - Work with no key (local only) and no network.
 
 **Must not:**
