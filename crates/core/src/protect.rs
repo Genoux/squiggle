@@ -14,9 +14,47 @@
 
 use crate::fix::Fix;
 
-/// `fixes` without the ones that would change protected text in `text`.
+/// `fixes` without the ones that would change protected text in `text`,
+/// or that change nothing the writer can see.
 pub fn keep(text: &str, fixes: Vec<Fix>) -> Vec<Fix> {
+    let fixes = fixes.into_iter().filter(|fix| shows(text, fix)).collect();
     filter(text, fixes, &spans(text))
+}
+
+/// Whether the change can be seen. Editors put characters in the text that
+/// draw nothing - a zero-width space beside a block, a byte-order mark, an
+/// object replacement for a chip - and the model drops them as strays. In
+/// Coda a card offered "Correct your punctuation" with no change in its
+/// sentence, underlined on the block's drag handle. A fix that only removes
+/// or swaps such characters changes nothing the writer can see, and one that
+/// takes out an inline object would delete the object.
+fn shows(text: &str, fix: &Fix) -> bool {
+    let original = fix.original(text);
+    if original.contains('\u{FFFC}') {
+        return false;
+    }
+    let seen = |s: &str| s.chars().filter(|c| !invisible(*c)).collect::<String>();
+    seen(&original) != seen(&fix.replacement)
+}
+
+/// A character that draws nothing and is not a space: format characters
+/// (zero-width spaces and joiners, direction marks, the byte-order mark, a
+/// soft hyphen), the object replacement, and controls other than tab and
+/// line breaks.
+fn invisible(c: char) -> bool {
+    matches!(
+        c,
+        '\u{00AD}'
+            | '\u{034F}'
+            | '\u{061C}'
+            | '\u{180E}'
+            | '\u{200B}'..='\u{200F}'
+            | '\u{202A}'..='\u{202E}'
+            | '\u{2060}'..='\u{2064}'
+            | '\u{2066}'..='\u{206F}'
+            | '\u{FEFF}'
+            | '\u{FFF9}'..='\u{FFFC}'
+    ) || c.is_control() && !c.is_whitespace()
 }
 
 /// `fixes` without the ones that would change a word of the user's
@@ -252,6 +290,43 @@ mod tests {
             message: String::new(),
             source: Source::Ai,
         }
+    }
+
+    #[test]
+    fn a_change_nobody_can_see_is_dropped() {
+        // A zero-width space before a block's first word, as Coda's editor
+        // keeps one, taken out alone or with the word it sits on.
+        let text = "\u{200B}This will probebly be at bad.";
+        let gone = Fix {
+            start: 0,
+            end: 1,
+            replacement: String::new(),
+            kind: Kind::Correctness,
+            message: "Correct your punctuation".into(),
+            source: Source::Ai,
+        };
+        assert!(keep(text, vec![gone]).is_empty());
+        assert!(keep(text, vec![fix(text, "\u{200B}This", "This")]).is_empty());
+        let bom = "\u{FEFF}ok";
+        assert!(keep(bom, vec![fix(bom, "\u{FEFF}", "")]).is_empty());
+        // The real fix beside it stays.
+        let real = fix(text, "probebly", "probably");
+        assert_eq!(keep(text, vec![real.clone()]), vec![real]);
+    }
+
+    #[test]
+    fn an_inline_object_is_never_taken_out() {
+        let text = "Pick\u{FFFC}an old ad";
+        assert!(keep(text, vec![fix(text, "\u{FFFC}an", " an")]).is_empty());
+    }
+
+    #[test]
+    fn spaces_and_tabs_still_count_as_a_change() {
+        let text = "So yes  was\tit";
+        let doubled = fix(text, "  ", " ");
+        let tab = fix(text, "\t", " ");
+        assert_eq!(keep(text, vec![doubled.clone()]), vec![doubled]);
+        assert_eq!(keep(text, vec![tab.clone()]), vec![tab]);
     }
 
     #[test]
