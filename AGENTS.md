@@ -351,6 +351,16 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
   input handling. Even with the selection confirmed, a direct write in Zen
   replaced a whole sentence with one word ("Correct the sentence", log:
   "a write could not be confirmed"). Native fields keep the direct write.
+- A removal is a Delete over the confirmed selection, never an empty paste:
+  Slack ignored the empty paste and the comma stayed (log: "the field holds
+  68 chars, expected 67"). The lab's `removal` case covers it in every
+  field.
+- An accepted fix is taken off the page at once and is neither offered nor
+  written again for `ACCEPTED_FOR` (a minute), keyed as a dismissal is (the
+  words before it and the change). Slack reported the new text late; in the
+  gap the old text still held the fix, it was offered 0.4s later, accepted
+  again, and "new" got two commas. It replaced a log line that only noted
+  "an accepted fix is offered again".
 - The last guard (`audit`): if within a second of an accept the field
   changed and is 10+ characters shorter than both what it held and what
   the fix should leave, ⌘Z takes it back. Typing cannot remove that much

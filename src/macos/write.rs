@@ -111,6 +111,13 @@ fn paste_over(
     if field.value().as_deref() != Some(before) {
         return Err("the text changed while selecting");
     }
-    paste::paste(replacement);
+    // A removal is a Delete over the selection, not an empty paste: Slack
+    // ignored the empty paste and the comma stayed (log: "the field holds 68
+    // chars, expected 67").
+    if replacement.is_empty() {
+        paste::delete();
+    } else {
+        paste::paste(replacement);
+    }
     Ok(())
 }
