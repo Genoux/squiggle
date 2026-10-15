@@ -17,24 +17,75 @@ use crate::fix::Fix;
 /// `fixes` without the ones that would change protected text in `text`,
 /// or that change nothing the writer can see.
 pub fn keep(text: &str, fixes: Vec<Fix>) -> Vec<Fix> {
-    let fixes = fixes.into_iter().filter(|fix| shows(text, fix)).collect();
+    let chars: Vec<char> = text.chars().collect();
+    let fixes = fixes.into_iter().filter(|fix| shows(&chars, fix)).collect();
     filter(text, fixes, &spans(text))
 }
 
-/// Whether the change can be seen. Editors put characters in the text that
-/// draw nothing - a zero-width space beside a block, a byte-order mark, an
-/// object replacement for a chip - and the model drops them as strays. In
-/// Coda a card offered "Correct your punctuation" with no change in its
-/// sentence, underlined on the block's drag handle. A fix that only removes
-/// or swaps such characters changes nothing the writer can see, and one that
-/// takes out an inline object would delete the object.
-fn shows(text: &str, fix: &Fix) -> bool {
-    let original = fix.original(text);
+/// Whether the change can be seen, and is the writer's. Editors keep
+/// characters in the text that draw nothing - zero-width spaces, byte-order
+/// marks, an object replacement for a chip - often with no-break spaces
+/// around them, and the model tidies them away. Coda puts "\u{a0}\u{a0}\u{200b}"
+/// on every empty line and "\u{a0}\u{200b}" before a block's first word; the
+/// model took each out as "Correct your punctuation", and the cards showed
+/// an empty sentence under underlines on blank lines and drag handles.
+///
+/// Dropped: a change that disappears once invisible characters are left out,
+/// every kind of space is a space, and the spaces opening or closing its
+/// line are let go; one made only of spaces and invisible characters that
+/// touches an invisible one; and any that takes out an inline object, which
+/// would delete it. A doubled space or a tab inside a sentence still shows.
+fn shows(chars: &[char], fix: &Fix) -> bool {
+    let original: String = chars[fix.start..fix.end].iter().collect();
     if original.contains('\u{FFFC}') {
         return false;
     }
-    let seen = |s: &str| s.chars().filter(|c| !invisible(*c)).collect::<String>();
-    seen(&original) != seen(&fix.replacement)
+    let line_start = chars[..fix.start]
+        .iter()
+        .rposition(|c| *c == '\n')
+        .map_or(0, |i| i + 1);
+    let line_end = chars[fix.end..]
+        .iter()
+        .position(|c| *c == '\n')
+        .map_or(chars.len(), |i| fix.end + i);
+    let pad = |run: &[char]| run.iter().all(|c| c.is_whitespace() || invisible(*c));
+    let opens = pad(&chars[line_start..fix.start]);
+    let closes = pad(&chars[fix.end..line_end]);
+    let seen = |s: &str| -> String {
+        let seen: String = s
+            .chars()
+            .filter(|c| !invisible(*c))
+            .map(|c| if space(c) { ' ' } else { c })
+            .collect();
+        let seen = if opens { seen.trim_start() } else { &seen };
+        let seen = if closes { seen.trim_end() } else { seen };
+        seen.to_string()
+    };
+    if seen(&original) == seen(&fix.replacement) {
+        return false;
+    }
+    let padding = |s: &str| {
+        s.chars()
+            .all(|c| c != '\n' && (c.is_whitespace() || invisible(c)))
+    };
+    !(padding(&original)
+        && padding(&fix.replacement)
+        && original
+            .chars()
+            .chain(fix.replacement.chars())
+            .any(invisible))
+}
+
+/// Whether `text` has nothing to check: only spaces and characters that
+/// draw nothing. Coda's empty lines are not empty strings.
+pub fn blank(text: &str) -> bool {
+    text.chars().all(|c| c.is_whitespace() || invisible(c))
+}
+
+/// A space of any width that is not a tab or a line break: a plain space,
+/// a no-break space, the thin and wide ones.
+fn space(c: char) -> bool {
+    c != '\t' && c != '\n' && c != '\r' && c.is_whitespace()
 }
 
 /// A character that draws nothing and is not a space: format characters
@@ -292,26 +343,46 @@ mod tests {
         }
     }
 
-    #[test]
-    fn a_change_nobody_can_see_is_dropped() {
-        // A zero-width space before a block's first word, as Coda's editor
-        // keeps one, taken out alone or with the word it sits on.
-        let text = "\u{200B}This will probebly be at bad.";
-        let gone = Fix {
-            start: 0,
-            end: 1,
-            replacement: String::new(),
+    fn at(start: usize, end: usize, replacement: &str) -> Fix {
+        Fix {
+            start,
+            end,
+            replacement: replacement.into(),
             kind: Kind::Correctness,
             message: "Correct your punctuation".into(),
             source: Source::Ai,
-        };
-        assert!(keep(text, vec![gone]).is_empty());
-        assert!(keep(text, vec![fix(text, "\u{200B}This", "This")]).is_empty());
+        }
+    }
+
+    /// Coda's text as Firefox reports it, and what the model answered for
+    /// each line, 2026-10-15: the scaffolding taken out, every run.
+    #[test]
+    fn editor_scaffolding_is_never_a_fix() {
+        let empty = "\u{a0}\u{a0}\u{200b}\n";
+        assert!(blank(empty));
+        assert!(keep(empty, vec![at(0, 3, "")]).is_empty());
+
+        let line = "\u{a0}\u{200b}This will probebly be at bad.\u{a0}\u{a0}\u{200b}\n";
+        assert!(!blank(line));
+        let spelling = fix(line, "probebly", "probably");
+        let grammar = fix(line, "at ", "");
+        let kept = keep(
+            line,
+            vec![
+                at(0, 2, ""),
+                spelling.clone(),
+                grammar.clone(),
+                at(31, 34, ""),
+            ],
+        );
+        assert_eq!(kept, vec![spelling, grammar]);
+
+        // Taken out with the word it sits on, or turned into a plain space.
+        assert!(keep(line, vec![at(0, 6, "This")]).is_empty());
+        let nbsp = "So yes\u{a0}it was.";
+        assert!(keep(nbsp, vec![fix(nbsp, "\u{a0}", " ")]).is_empty());
         let bom = "\u{FEFF}ok";
         assert!(keep(bom, vec![fix(bom, "\u{FEFF}", "")]).is_empty());
-        // The real fix beside it stays.
-        let real = fix(text, "probebly", "probably");
-        assert_eq!(keep(text, vec![real.clone()]), vec![real]);
     }
 
     #[test]

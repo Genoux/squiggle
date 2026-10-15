@@ -153,13 +153,22 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
   model's fix was dropped and the word stayed underlined by nothing.
   A bare domain may change case only, as Grammarly offers "Frame.io" for
   "frame.io"; a link, address or path never, since case can break one.
-- A fix that changes nothing the writer can see is dropped (`protect::keep`):
-  one that only removes or swaps characters that draw nothing (zero-width
-  spaces and joiners, a byte-order mark, direction marks, controls), and any
-  that takes out an inline object (U+FFFC). Editors keep such characters
-  beside blocks and chips, and the model drops them as strays. In Coda a
-  card offered "Correct your punctuation" with no change in its sentence,
-  underlined on the block's drag handle.
+- A fix that changes nothing the writer can see is dropped (`protect::keep`).
+  Editors keep scaffolding in the text: Firefox reports a Coda line as
+  "\u{a0}\u{a0}\u{200b}" when empty and "\u{a0}\u{200b}This ...\u{a0}\u{a0}\u{200b}"
+  around words. The model took each piece out ("Correct your punctuation"),
+  every run, and the cards showed an empty sentence under underlines on
+  blank lines and drag handles. Dropped: a change that vanishes once
+  invisible characters are left out, every space is a plain space, and the
+  spaces opening or closing the line are let go; spaces and invisible
+  characters together; anything that takes out an inline object (U+FFFC).
+  A doubled space or a tab inside a sentence still shows. A line of only
+  spaces and invisible characters is blank (`protect::blank`) and is not
+  sent to the model. The first fix only covered a zero-width space alone,
+  guessed from a screenshot, and missed this; read the field's real text
+  (with `\u{..}` escapes) before writing the rule. `gramly check` asks a
+  paragraph at a time, as the app does: whole, Coda's text came back
+  without its blank lines and showed nothing.
 - The dictionary binds both passes. Harper is given the words; the model
   is not, and with AI on its answer is the whole answer, so a word added
   from a card was corrected again on the next pause. Every fix that would

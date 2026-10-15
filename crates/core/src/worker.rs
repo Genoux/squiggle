@@ -175,21 +175,8 @@ fn model_loop(pass: Pass, rx: Receiver<Request>, out: Sender<Outcome>) {
         }
         let dialect = config.dialect.as_str();
 
-        // Each paragraph is asked with its line break when it has one, which
-        // is how the model knows it is finished (see `ai::FINISHED`). The
-        // cache is keyed by exactly what was asked.
-        let pieces: Vec<(usize, String)> = paragraphs(&request.text)
-            .into_iter()
-            .map(|(offset, line)| {
-                let next = request.text.chars().nth(offset + line.chars().count());
-                let asked = if next == Some('\n') {
-                    format!("{line}\n")
-                } else {
-                    line.to_string()
-                };
-                (offset, asked)
-            })
-            .collect();
+        // The cache is keyed by exactly what was asked.
+        let pieces = asked(&request.text);
         let missing: Vec<&str> = pieces
             .iter()
             .map(|(_, p)| p.as_str())
@@ -270,12 +257,30 @@ fn model_loop(pass: Pass, rx: Receiver<Request>, out: Sender<Outcome>) {
     }
 }
 
+/// What the model is asked for `text`: each paragraph with the char offset
+/// it starts at, and its line break when it has one, which is how the model
+/// knows it is finished (see `ai::FINISHED`).
+pub fn asked(text: &str) -> Vec<(usize, String)> {
+    paragraphs(text)
+        .into_iter()
+        .map(|(offset, line)| {
+            let next = text.chars().nth(offset + line.chars().count());
+            let asked = if next == Some('\n') {
+                format!("{line}\n")
+            } else {
+                line.to_string()
+            };
+            (offset, asked)
+        })
+        .collect()
+}
+
 /// Non-blank lines with the char offset each starts at.
 pub fn paragraphs(text: &str) -> Vec<(usize, &str)> {
     let mut out = Vec::new();
     let mut offset = 0;
     for line in text.split('\n') {
-        if !line.trim().is_empty() {
+        if !crate::protect::blank(line) {
             out.push((offset, line));
         }
         offset += line.chars().count() + 1;
