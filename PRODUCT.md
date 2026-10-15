@@ -20,15 +20,16 @@ writer's voice intact, and a monthly cost the user never thinks about.
 ## Positioning
 
 Grammarly's interaction - underline, card, accept - without the
-account, the subscription, or the rewriting. Spelling and grammar are checked
-on the machine; the model is the user's own key, asked for small edits, and
-told to keep their voice.
+account or the subscription. Spelling and grammar are checked on the machine;
+the model is the user's own key, asked for small edits, and told to keep
+their voice. Clearer wording for a whole sentence is proposed apart from the
+corrections, as Grammarly's "Improve your text" is, and never applied unasked.
 
 ## Operating Context
 
 Two surfaces, both drawn over other apps and none of them a window to switch to:
 
-- **Underlines** - red for mistakes, blue for clarity, drawn under the words.
+- **Underlines** - red for mistakes, blue for clearer wording, drawn under the words.
 - **The card** - on hover: the change, why, Accept / Dismiss / Add to dictionary.
 
 The menu bar icon holds the switches. No Dock icon.
@@ -45,6 +46,7 @@ The menu bar icon holds the switches. No Dock icon.
 **Must not:**
 
 - Read password fields, or correct terminals.
-- Rewrite the user's text for style. Edits, not paraphrases.
+- Rewrite the user's text unasked. A clearer wording is a proposal on its own
+  card, kept apart from corrections, applied only on Accept.
 - Steal focus, move the caret, or leave the clipboard changed.
 - Need a terminal for daily use.

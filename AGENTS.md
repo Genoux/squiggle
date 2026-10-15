@@ -13,7 +13,8 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
   platform assumption creeps in before the Linux surface exists.
 - `src/macos` is the surface: Accessibility in (`ax.rs`), panels out
   (`overlay.rs`), the run loop and menu (`app.rs`), the paste fallback
-  (`paste.rs`), Flow's palette (`theme.rs`).
+  (`paste.rs`), the Ink palette, font and mark (`theme.rs`), and
+  `gramly preview` (`preview.rs`).
 - One binary. Flow splits daemon and console because iced brings wgpu; Gramly
   draws with AppKit directly and has no settings window yet. If one is added
   with iced, it goes in its own workspace root like Flow's console.
@@ -34,7 +35,9 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
   and so do spaces turned into punctuation ("yes  was" → "yes, was"
   shows "yes,"): left on the spaces, the card said "Remove the extra
   space" and hid the comma. Only a change that is spaces both sides is
-  shown as spacing.
+  shown as spacing. The spaces ending a line are never part of a fix:
+  "now? " came back as "? " -> "", past the end-mark rule, and accepting
+  it in a web field did nothing.
   A correction touching over 60% of a paragraph's words is a rewrite and is
   dropped whole; a single fix over 80 chars is dropped.
 - A wrong real word is corrected to the word it looks like, never to a
@@ -45,11 +48,15 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
   prints what the app draws (the model's fixes, protected text removed).
   The prompt also names agreement after "there", a comma joining two
   sentences, and shorthand never expanded ("u", "ok"): each was a miss
-  or a wrong suggestion in the benchmark. Temperature 0 changed nothing measurable;
+  or a wrong suggestion in the benchmark. Shorthand is kept only where it
+  reads as shorthand: "for nw?" was left as "nw" (no worries) every run,
+  and no underline appeared. With the rule and two examples, "now" five
+  runs in five, "nw, take your time" still left, benchmark up (F0.97,
+  94% exact). Temperature 0 changed nothing measurable;
   reasoning off missed typos ("Pickan", "oldad") and still varied;
   reasoning medium took 6s a paragraph against 2.2s, past `MODEL_LATE`.
   Reasoning stays low.
-- The model's fixes get two rules it only keeps most of the time
+- The model's fixes get rules it only keeps most of the time
   (`diff::final_form`): a fix to a sentence's first word comes with its
   capital, and a fix that only turns "!" into another end mark is
   dropped. Asked about "thi is th teste for me!" it answered "this" two
@@ -57,7 +64,10 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
   fix, where Grammarly offers "This" once. On a finished line it offered
   "!" -> ".". Benchmark unchanged (F0.95, 92% exact) with both cases added.
   A third: an ellipsis is never added. On a line still being typed it
-  turned "congelationÉ" into "congelation..." two runs in three.
+  turned "congelationÉ" into "congelation..." two runs in three. A
+  fourth: an end mark the writer typed is never taken away. After an
+  accepted improvement, "Can you think about conservation for now?" was
+  offered without its "?" one run in three.
 - A question ended with a period ("Can you think about it.") is left
   alone. Told to fix it, with an example of that very shape, the model
   still kept the period every run; Grammarly's free check leaves it too
@@ -80,6 +90,21 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
   answered for the current text, its fixes are the whole answer. Harper on
   short French slang offered "Eat" for "ERT", and only runs on sentences
   detected as clearly English.
+- Clearer wording is a third pass (`improve.rs`), its own request on its
+  own thread, so the corrections' prompt and benchmark are untouched. The
+  model names each awkward sentence and its rewrite; the fix is cut to the
+  words that change, so accept, rebase and dismiss work as for corrections.
+  It is drawn blue, under its first changed words (a rewrite spans most of
+  a sentence and may wrap), only once the corrections have answered, and
+  only in a sentence with no correction left - the two cards would fight
+  over the words. Its card is never part of "Correct the sentence".
+  Dropped in code: a rewrite that only respells or repunctuates, one
+  keeping under 40% of the words (a polite French request came back as
+  "Tu pourrais venir demain ?"), and the sentence still being typed.
+  `examples/bench_improve.rs` over `bench/improve.json`, 2026-10-14, on
+  the corrections' route: no proposal on 36 runs of text that reads fine,
+  29/30 on awkward text, p95 1.9s, $0.15 per 1000. It has no wording
+  score; read `--show` before changing the prompt.
 - The model is asked per paragraph, cached by exact paragraph text. Typing in
   one paragraph of a long email costs one request; refocusing costs none.
 - Pinned to `google/gemini-3.5-flash-lite` on `google-ai-studio`,
@@ -105,6 +130,13 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
   sentence came back unreliable; between two it is decisive. Harper is
   English-only and runs on English paragraphs alone - on French it flags
   every word. The model is told the language by name, as Flow does.
+  A paragraph is named one language only if no sentence of four words or
+  more is uncertain. "Can you think about conservation for now?" scored
+  0.33 English and was skipped, the paragraph went out as French, and the
+  model dropped the English sentence (a rewrite, so nothing was shown) or
+  mangled the French. Counted as unknown, the paragraph gets the mixed
+  prompt and "Est a tu vue la lune." comes back right most runs; Haiku
+  and Flash-Lite still miss it one run in three, Sonnet never.
 - Links, domains, email addresses, @mentions, #tags, file paths, `code` and
   identifiers (`AdCollection`, `snake_case`) are never corrected
   (`protect.rs`), as in Grammarly. The prompt asks the model to leave them,
@@ -129,13 +161,16 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
   benchmarked prompt is what American users get; the others name the
   spelling with examples. The answer cache is cleared when it changes.
 - The dictionary has a window (`dictionary.rs`): a field to add, the list
-  to remove from. Neutral dark greys, not Flow's palette, and no focus
-  ring, since the ring is the system accent: a Flow-styled console with
-  history and stats was mocked first and judged too much, and the user
-  wanted the Mac's own neutral look. `dictionary.txt` stays the store, so a
-  word added from a card or typed into the file shows on the next open.
-  It is a titled window, not a panel: it has to take keys, and an
-  accessory app activates itself to give it them.
+  to remove from, in the card's look. A Flow-styled console with history
+  and stats was mocked first and judged too much; a neutral Mac window
+  came next, and then the user asked for nothing macOS-specific, since
+  Linux follows. It is borderless, with its own header and close button,
+  and says it can become key (`KeyWindow`): a borderless window refuses
+  keys otherwise, and the field must take them. An accessory app activates
+  itself to give it them. Escape and Command-W close it; no focus ring,
+  since the ring is the system accent. `dictionary.txt` stays the store,
+  so a word added from a card or typed into the file shows on the next
+  open.
 - "Turn off in <app>" stores bundle ids in `off_in`, checked against the
   app in front each tick; "Pause for an hour" lives in memory only, so a
   restart is a fresh start. Both show in the menu's status line.
@@ -311,9 +346,11 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
   grant. Install now signs with a "Gramly Local Signing" certificate it makes
   once in the login keychain; the requirement names the certificate and the
   grant survives rebuilds.
-- Nothing animates. Core Animation's implicit actions drew every new
-  underline sliding in from the panel corner; layer changes go through
+- Nothing animates by itself. Core Animation's implicit actions drew every
+  new underline sliding in from the panel corner; layer changes go through
   `overlay::still` with actions disabled, panels have no window animation.
+  The one motion is deliberate and explicit: the card fades in over 140ms,
+  moving its last 3pt towards its word (`fade_in`).
 - Underlines are carried across edits (`fix::rebase`) instead of cleared on
   every keystroke, which flickered: a fix the edit touched is dropped, the
   rest shift. Letters typed onto a word's edge count as touching it; a space
@@ -324,11 +361,42 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
   It is keyed by the three words before the fix on its line plus the
   change, so it holds while the sentence is still being typed and does
   not hide the same change elsewhere.
-- Two cards. One fix in a sentence gets the small one (title, the
-  replacement to click, Dismiss). Two or more get the sentence card with
-  every change inline and "Correct the sentence". Grouping is
-  `fix::sentence`, which splits early on abbreviations - a smaller group,
-  never a wrong one.
+- One card. Every suggestion - a spelling, a removal, several fixes in a
+  sentence, clearer wording - shows its sentence with the change in place
+  (struck: what goes; bold on a fill: what comes), then a row of buttons,
+  all 32pt, the main one in ink. Out of its sentence a lone replacement
+  did not say why ("it's"), and a removal had to be shown as what was left
+  ("me the" for "send me the the link"); `Remove “?”` before that made the
+  reader work out the result. The sentence is cut to six words either
+  side of the change (`snippet`), and changes one kept word apart are
+  shown as one (`bridged`): word by word, a rewrite left "we" standing
+  between two struck phrases. A change of spaces alone is shown as ␣.
+  Spelling adds "Add to dictionary"; two or more fixes in a sentence get
+  "Correct the sentence". Grouping is `fix::sentence`, which splits early
+  on abbreviations - a smaller group, never a wrong one. Accepting is a
+  button, no longer a click on the replacement, which now sits inside the
+  sentence.
+- The look is Ink (`theme.rs`, DESIGN.md): neutral surfaces, ink for the
+  main button, and the underline's colour as the only colour. It replaced
+  Flow's palette, whose green carried every job and whose dark card sat on
+  white documents. Nothing in it belongs to macOS - no vibrancy, system
+  accent or SF font - because the Linux surface will draw the same thing.
+  Cards and the dictionary take the system's light or dark appearance when
+  they are built; underlines are the same in both, since the app
+  underneath can be either.
+- The font is Atkinson Hyperlegible Next, bundled in the binary
+  (`assets/fonts`, SIL Open Font License) and loaded from its bytes: a
+  release is one file, and a bundled font looks the same on every machine.
+  Its I, l and 1 differ, which matters when the fix is a capital I.
+- The card's shadow is Gramly's, in a panel of its own that ignores the
+  mouse (`shade`). The system's shadow would differ on Linux, and drawn in
+  the card's own panel, its pixels would take clicks meant for the text below
+  the card.
+- The menu bar icon is Gramly's mark, drawn in code (`theme::mark`): a g
+  whose tail is the underline. SF Symbols do not exist on Linux.
+- `gramly preview [dir]` draws every card and the dictionary to PNG in both
+  appearances, from the same code, in an off-screen window. Look at it
+  before and after changing how they are drawn.
 
 ## Repository
 

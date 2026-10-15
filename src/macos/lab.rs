@@ -110,6 +110,13 @@ const CASES: &[Case] = &[
         text: "- llimit the scope\n- teh rest",
         fixes: &[("llimit", "limit"), ("teh", "the")],
     },
+    // An improvement: most of a sentence rewritten, words moved, the end
+    // mark changed, with a sentence after it that must not move.
+    Case {
+        name: "improve",
+        text: "Can you think for now about conservation. What can I keep?",
+        fixes: &[("for now about conservation.", "about conservation for now?")],
+    },
     Case {
         name: "chip",
         text: "Pick {chip} an oldad for teh campaign",

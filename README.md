@@ -48,10 +48,11 @@ Updating is `git pull && ./packaging/install.sh`. Removing it is
 |---|---|
 | Red underline | A mistake - spelling, grammar, a wrong word |
 | Blue underline | Correct, but could read better |
-| Hover an underline | The fix, why, **Accept** / **Dismiss** / **Add to dictionary** |
+| Hover an underline | Your sentence with the fix in place, then **Accept** / **Dismiss** / **Add to dictionary** |
 | Menu bar icon | Pause for an hour, turn off in the app in front, AI on/off, key, spelling, personal dictionary |
 | `gramly doctor` | What Gramly can see in the field you click into |
 | `gramly check < file.txt` | The same suggestions, printed |
+| `gramly check --improve < file.txt` | The clearer wording the app proposes, printed |
 
 Terminals are skipped on purpose, as are password fields.
 
@@ -84,8 +85,13 @@ stored by Gramly. Password fields are never read.
 cargo test --workspace
 GRAMLY_OPENROUTER_KEY=sk-or-... cargo test -p gramly-core -- --ignored   # live model
 cargo run -- lab          # accept fixes in real text fields, off screen, and audit them
+cargo run -- preview      # draw every card and the dictionary to target/preview, light and dark
 ./sandbox                 # every release check, with a report; --ai, --models, --screen, --all
 ```
 
-See [AGENTS.md](AGENTS.md) for why things are built the way they are, and
+See [AGENTS.md](AGENTS.md) for why things are built the way they are,
+[DESIGN.md](DESIGN.md) for how the card and the dictionary look, and
 [TROUBLESHOOTING.md](TROUBLESHOOTING.md) when something does not underline.
+
+The bundled font, Atkinson Hyperlegible Next, is under the SIL Open Font
+License ([assets/fonts/OFL.txt](assets/fonts/OFL.txt)).

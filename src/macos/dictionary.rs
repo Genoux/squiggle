@@ -2,54 +2,88 @@
 //! the list to remove one from. Opened from the menu, where it replaced
 //! opening `dictionary.txt` in TextEdit.
 //!
-//! Neutral dark greys rather than Flow's palette: the window is a utility,
-//! and it should read as part of the Mac before it reads as part of a brand.
+//! Drawn in Gramly's own look, not the Mac's: a borderless window with its
+//! own header and close button, the card's surface, buttons and spacing. A
+//! titled window brought the traffic lights and the system's title bar,
+//! which the Linux surface will not have. Borderless windows refuse keys
+//! unless they say otherwise, so `KeyWindow` does; Escape and Command-W
+//! close it.
+//!
 //! The file stays the store, so a word added from a card, or typed into the
-//! file by hand, shows the next time the window opens.
+//! file by hand, shows the next time the window opens. The content is built
+//! again each time it opens, so it follows a change of appearance.
 
-use crate::macos::theme::{self, Rgba};
+use crate::macos::overlay::plain_button;
+use crate::macos::theme::{self, Palette, Rgba, Weight};
 use gramly_core::config;
 use objc2::rc::Retained;
-use objc2::runtime::AnyObject;
-use objc2::{MainThreadMarker, MainThreadOnly, sel};
+use objc2::runtime::{AnyObject, NSObjectProtocol};
+use objc2::{AnyThread, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSAppearance, NSAppearanceCustomization, NSAppearanceNameDarkAqua, NSApplication,
-    NSBackingStoreType, NSBorderType, NSButton, NSFont, NSFontWeightRegular, NSFontWeightSemibold,
-    NSImage, NSLineBreakMode, NSScrollView, NSTextField, NSTextFieldBezelStyle, NSView, NSWindow,
-    NSWindowStyleMask, NSWindowTitleVisibility,
+    NSApplication, NSBackingStoreType, NSBorderType, NSButton, NSColor, NSFocusRingType,
+    NSFontAttributeName, NSForegroundColorAttributeName, NSImageView, NSLineBreakMode, NSResponder,
+    NSScrollView, NSTextAlignment, NSTextField, NSView, NSWindow, NSWindowStyleMask,
 };
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};
-use objc2_foundation::NSString;
+use objc2_foundation::{
+    NSAttributedString, NSAttributedStringKey, NSDictionary, NSObject, NSString,
+};
 
-const BACKGROUND: Rgba = Rgba {
-    r: 0.118,
-    g: 0.118,
-    b: 0.118,
-    a: 1.0,
-}; // #1E1E1E
-const TEXT: Rgba = Rgba {
-    r: 0.961,
-    g: 0.961,
-    b: 0.961,
-    a: 1.0,
-}; // #F5F5F5
-const MUTED: Rgba = Rgba {
-    r: 0.604,
-    g: 0.604,
-    b: 0.604,
-    a: 1.0,
-}; // #9A9A9A
-
-const WIDTH: f64 = 340.0;
-const HEIGHT: f64 = 440.0;
+const WIDTH: f64 = 320.0;
+const HEIGHT: f64 = 460.0;
 const PAD: f64 = 16.0;
-const ROW: f64 = 30.0;
-/// Where the list starts and stops, from the top and bottom of the window.
-const LIST_TOP: f64 = 132.0;
-const LIST_BOTTOM: f64 = 34.0;
+const ROW: f64 = 36.0;
+/// Where the field sits, and where the list starts and stops, from the top
+/// and bottom of the window.
+const FIELD_TOP: f64 = 74.0;
+const LIST_TOP: f64 = FIELD_TOP + 32.0 + 12.0;
+const LIST_BOTTOM: f64 = 40.0;
+
+define_class!(
+    #[unsafe(super(NSWindow, NSResponder, NSObject))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "GramlyKeyWindow"]
+    struct KeyWindow;
+
+    unsafe impl NSObjectProtocol for KeyWindow {}
+
+    impl KeyWindow {
+        #[unsafe(method(canBecomeKeyWindow))]
+        fn can_become_key_window(&self) -> bool {
+            true
+        }
+
+        /// Command-W, and the close button: a borderless window has no
+        /// close button for `performClose:` to press.
+        #[unsafe(method(performClose:))]
+        fn perform_close(&self, _sender: Option<&AnyObject>) {
+            self.orderOut(None);
+        }
+
+        #[unsafe(method(cancelOperation:))]
+        fn cancel_operation(&self, _sender: Option<&AnyObject>) {
+            self.orderOut(None);
+        }
+    }
+);
+
+impl KeyWindow {
+    fn new(mtm: MainThreadMarker) -> Retained<Self> {
+        let this = Self::alloc(mtm).set_ivars(());
+        unsafe {
+            msg_send![
+                super(this),
+                initWithContentRect: CGRect::new(CGPoint::new(0.0, 0.0), CGSize::new(WIDTH, HEIGHT)),
+                styleMask: NSWindowStyleMask::Borderless,
+                backing: NSBackingStoreType::Buffered,
+                defer: false,
+            ]
+        }
+    }
+}
 
 pub struct Dictionary {
-    window: Retained<NSWindow>,
+    window: Retained<KeyWindow>,
     field: Retained<NSTextField>,
     list: Retained<NSScrollView>,
     count: Retained<NSTextField>,
@@ -60,19 +94,12 @@ pub struct Dictionary {
 fn label(
     text: &str,
     size: f64,
-    bold: bool,
+    weight: Weight,
     color: Rgba,
     mtm: MainThreadMarker,
 ) -> Retained<NSTextField> {
     let label = NSTextField::labelWithString(&NSString::from_str(text), mtm);
-    let weight = unsafe {
-        if bold {
-            NSFontWeightSemibold
-        } else {
-            NSFontWeightRegular
-        }
-    };
-    label.setFont(Some(&NSFont::systemFontOfSize_weight(size, weight)));
+    label.setFont(Some(&theme::font(size, weight)));
     label.setTextColor(Some(&theme::ns(color)));
     label.setLineBreakMode(NSLineBreakMode::ByTruncatingTail);
     label
@@ -87,78 +114,159 @@ fn from_top(x: f64, top: f64, width: f64, height: f64, within: f64) -> CGRect {
     )
 }
 
+/// A borderless button showing the cross, tinted.
+fn cross_button(
+    target: &AnyObject,
+    action: objc2::runtime::Sel,
+    color: Rgba,
+    mtm: MainThreadMarker,
+) -> Retained<NSButton> {
+    let button = unsafe {
+        NSButton::buttonWithImage_target_action(
+            &theme::cross(14.0),
+            Some(target),
+            Some(action),
+            mtm,
+        )
+    };
+    button.setBordered(false);
+    button.setContentTintColor(Some(&theme::ns(color)));
+    button
+}
+
 impl Dictionary {
     pub fn new(target: &AnyObject, mtm: MainThreadMarker) -> Self {
-        let window = unsafe {
-            NSWindow::initWithContentRect_styleMask_backing_defer(
-                NSWindow::alloc(mtm),
-                CGRect::new(CGPoint::new(0.0, 0.0), CGSize::new(WIDTH, HEIGHT)),
-                NSWindowStyleMask::Titled
-                    | NSWindowStyleMask::Closable
-                    | NSWindowStyleMask::FullSizeContentView,
-                NSBackingStoreType::Buffered,
-                false,
-            )
-        };
-        window.setTitle(&NSString::from_str("Dictionary"));
-        window.setTitleVisibility(NSWindowTitleVisibility::Hidden);
-        window.setTitlebarAppearsTransparent(true);
+        let window = KeyWindow::new(mtm);
+        window.setOpaque(false);
+        window.setBackgroundColor(Some(&NSColor::clearColor()));
+        window.setHasShadow(true);
         window.setMovableByWindowBackground(true);
-        window.setBackgroundColor(Some(&theme::ns(BACKGROUND)));
         unsafe { window.setReleasedWhenClosed(false) };
-        if let Some(dark) = NSAppearance::appearanceNamed(unsafe { NSAppearanceNameDarkAqua }) {
-            window.setAppearance(Some(&dark));
+        let (field, list, count) = Self::build(&window, target, mtm);
+        Self {
+            window,
+            field,
+            list,
+            count,
+            words: Vec::new(),
         }
+    }
 
+    /// The window's content in the current appearance.
+    fn build(
+        window: &KeyWindow,
+        target: &AnyObject,
+        mtm: MainThreadMarker,
+    ) -> (
+        Retained<NSTextField>,
+        Retained<NSScrollView>,
+        Retained<NSTextField>,
+    ) {
+        let p = theme::palette(mtm);
         let content = NSView::initWithFrame(
             NSView::alloc(mtm),
             CGRect::new(CGPoint::new(0.0, 0.0), CGSize::new(WIDTH, HEIGHT)),
         );
+        content.setWantsLayer(true);
+        if let Some(layer) = content.layer() {
+            layer.setBackgroundColor(Some(&theme::cg(p.surface)));
+            layer.setCornerRadius(12.0);
+            layer.setBorderWidth(0.5);
+            layer.setBorderColor(Some(&theme::cg(p.edge)));
+        }
         let inner = WIDTH - PAD * 2.0;
 
-        let title = label("Dictionary", 17.0, true, TEXT, mtm);
-        title.setFrame(from_top(PAD, 40.0, inner, 22.0, HEIGHT));
+        // Header: the mark, the title, the close button.
+        let mark = NSImageView::imageViewWithImage(&theme::mark(20.0, Some(theme::MISTAKE)), mtm);
+        mark.setFrame(from_top(PAD, PAD, 20.0, 20.0, HEIGHT));
+        content.addSubview(&mark);
+        let title = label("Dictionary", 15.0, Weight::Semibold, p.text, mtm);
+        let title_h = title.fittingSize().height;
+        title.setFrame(from_top(
+            PAD + 30.0,
+            PAD + ((20.0 - title_h) / 2.0).round(),
+            inner - 30.0 - 32.0,
+            title_h,
+            HEIGHT,
+        ));
         content.addSubview(&title);
+        let close = cross_button(window, sel!(performClose:), p.text2, mtm);
+        close.setToolTip(Some(&NSString::from_str("Close")));
+        close.setFrame(from_top(
+            WIDTH - PAD - 28.0 + 6.0,
+            PAD - 4.0,
+            28.0,
+            28.0,
+            HEIGHT,
+        ));
+        content.addSubview(&close);
 
-        let sub = label("Words Gramly never flags.", 12.5, false, MUTED, mtm);
-        sub.setFrame(from_top(PAD, 64.0, inner, 18.0, HEIGHT));
+        let sub = label(
+            "Gramly never flags these words.",
+            13.0,
+            Weight::Regular,
+            p.text2,
+            mtm,
+        );
+        sub.setFrame(from_top(PAD, PAD + 24.0, inner, 18.0, HEIGHT));
         content.addSubview(&sub);
 
-        let add_width = 64.0;
+        // The field and its button.
+        let add = plain_button("Add", false, sel!(addWord:), target, p, mtm);
+        let add_w = add.frame().size.width;
+        add.setFrameOrigin(from_top(WIDTH - PAD - add_w, FIELD_TOP, add_w, 32.0, HEIGHT).origin);
+        content.addSubview(&add);
+        let box_w = inner - add_w - 8.0;
+        let frame = NSView::initWithFrame(
+            NSView::alloc(mtm),
+            from_top(PAD, FIELD_TOP, box_w, 32.0, HEIGHT),
+        );
+        frame.setWantsLayer(true);
+        if let Some(layer) = frame.layer() {
+            layer.setCornerRadius(8.0);
+            layer.setBorderWidth(1.0);
+            layer.setBorderColor(Some(&theme::cg(p.line)));
+        }
+        content.addSubview(&frame);
+        let font = theme::font(14.0, Weight::Regular);
         let field = NSTextField::initWithFrame(
             NSTextField::alloc(mtm),
-            from_top(PAD, 94.0, inner - add_width - 8.0, 28.0, HEIGHT),
+            CGRect::new(CGPoint::new(0.0, 0.0), CGSize::new(box_w - 20.0, 20.0)),
         );
-        field.setBezeled(true);
-        field.setBezelStyle(NSTextFieldBezelStyle::RoundedBezel);
-        field.setPlaceholderString(Some(&NSString::from_str("Add a word")));
-        field.setFont(Some(&NSFont::systemFontOfSize(14.0)));
-        // The ring is the system accent, usually blue: the one colour in a
-        // window meant to stay neutral. The caret already shows focus.
-        field.setFocusRingType(objc2_app_kit::NSFocusRingType::None);
+        field.setBezeled(false);
+        field.setBordered(false);
+        field.setDrawsBackground(false);
+        field.setFont(Some(&font));
+        field.setTextColor(Some(&theme::ns(p.text)));
+        // The ring would be the system accent; the outline and the caret
+        // already show where typing goes.
+        field.setFocusRingType(NSFocusRingType::None);
+        let placeholder = {
+            let color = theme::ns(p.text2);
+            let keys: [&NSAttributedStringKey; 2] =
+                unsafe { [NSFontAttributeName, NSForegroundColorAttributeName] };
+            let values: [&AnyObject; 2] = [&font, &color];
+            let attributes = NSDictionary::from_slices(&keys, &values);
+            unsafe {
+                NSAttributedString::initWithString_attributes(
+                    NSAttributedString::alloc(),
+                    &NSString::from_str("Add a word"),
+                    Some(&attributes),
+                )
+            }
+        };
+        field.setPlaceholderAttributedString(Some(&placeholder));
+        let field_h = field.fittingSize().height.ceil();
+        field.setFrame(CGRect::new(
+            CGPoint::new(10.0, ((32.0 - field_h) / 2.0).round()),
+            CGSize::new(box_w - 20.0, field_h),
+        ));
         // Return in the field adds, the same as the button.
         unsafe {
             field.setTarget(Some(target));
             field.setAction(Some(sel!(addWord:)));
         }
-        content.addSubview(&field);
-
-        let add = unsafe {
-            NSButton::buttonWithTitle_target_action(
-                &NSString::from_str("Add"),
-                Some(target),
-                Some(sel!(addWord:)),
-                mtm,
-            )
-        };
-        add.setFrame(from_top(
-            WIDTH - PAD - add_width,
-            94.0,
-            add_width,
-            28.0,
-            HEIGHT,
-        ));
-        content.addSubview(&add);
+        frame.addSubview(&field);
 
         let list = NSScrollView::initWithFrame(
             NSScrollView::alloc(mtm),
@@ -173,26 +281,24 @@ impl Dictionary {
         list.setBorderType(NSBorderType::NoBorder);
         content.addSubview(&list);
 
-        let count = label("", 12.0, false, MUTED, mtm);
+        let count = label("", 12.5, Weight::Regular, p.text2, mtm);
         count.setFrame(CGRect::new(
-            CGPoint::new(PAD, 10.0),
+            CGPoint::new(PAD, 14.0),
             CGSize::new(inner, 16.0),
         ));
         content.addSubview(&count);
 
         window.setContentView(Some(&content));
-        Self {
-            window,
-            field,
-            list,
-            count,
-            words: Vec::new(),
-        }
+        (field, list, count)
     }
 
     /// Reads the file again and brings the window forward, ready to type.
     pub fn show(&mut self, target: &AnyObject, mtm: MainThreadMarker) {
         let first = !self.window.isVisible();
+        if first {
+            let (field, list, count) = Self::build(&self.window, target, mtm);
+            (self.field, self.list, self.count) = (field, list, count);
+        }
         self.reload(target, mtm);
         if first {
             self.window.center();
@@ -214,6 +320,16 @@ impl Dictionary {
         words.dedup_by_key(|w| w.to_lowercase());
         self.words = words;
         self.render(target, mtm);
+    }
+
+    /// Shows `words` without reading the file, for `gramly preview`.
+    pub(crate) fn preview(&mut self, words: &[&str], target: &AnyObject, mtm: MainThreadMarker) {
+        self.words = words.iter().map(|w| w.to_string()).collect();
+        self.render(target, mtm);
+    }
+
+    pub(crate) fn content(&self) -> Option<Retained<NSView>> {
+        self.window.contentView()
     }
 
     /// Adds what the field holds. Returns whether the dictionary changed.
@@ -249,6 +365,7 @@ impl Dictionary {
     }
 
     fn render(&self, target: &AnyObject, mtm: MainThreadMarker) {
+        let p: &Palette = theme::palette(mtm);
         let clip = self.list.contentSize();
         let width = clip.width;
         let height = (self.words.len() as f64 * ROW).max(clip.height);
@@ -258,42 +375,34 @@ impl Dictionary {
         );
         if self.words.is_empty() {
             let empty = label(
-                "No words yet. Add one above, or choose\n\u{201c}Add to dictionary\u{201d} on a suggestion.",
-                12.5,
-                false,
-                MUTED,
+                "No words yet. Words you add here, or from a card, show up in this list.",
+                13.0,
+                Weight::Regular,
+                p.text2,
                 mtm,
             );
             empty.setLineBreakMode(NSLineBreakMode::ByWordWrapping);
-            empty.setAlignment(objc2_app_kit::NSTextAlignment::Center);
-            empty.setFrame(from_top(0.0, 40.0, width, 40.0, height));
+            empty.setAlignment(NSTextAlignment::Center);
+            empty.setFrame(from_top(24.0, 28.0, width - 48.0, 40.0, height));
             document.addSubview(&empty);
         }
-        let image = NSImage::imageWithSystemSymbolName_accessibilityDescription(
-            &NSString::from_str("xmark"),
-            Some(&NSString::from_str("Remove")),
-        );
         for (index, word) in self.words.iter().enumerate() {
             let top = index as f64 * ROW;
-            let text = label(word, 14.0, false, TEXT, mtm);
-            text.setFrame(from_top(8.0, top + 6.0, width - 50.0, 18.0, height));
+            let text = label(word, 14.0, Weight::Regular, p.text, mtm);
+            let text_h = text.fittingSize().height;
+            text.setFrame(from_top(
+                8.0,
+                top + ((ROW - text_h) / 2.0).round(),
+                width - 52.0,
+                text_h,
+                height,
+            ));
             document.addSubview(&text);
-            if let Some(image) = &image {
-                let remove = unsafe {
-                    NSButton::buttonWithImage_target_action(
-                        image,
-                        Some(target),
-                        Some(sel!(removeWord:)),
-                        mtm,
-                    )
-                };
-                remove.setBordered(false);
-                remove.setContentTintColor(Some(&theme::ns(MUTED)));
-                remove.setTag(index as isize);
-                remove.setToolTip(Some(&NSString::from_str(&format!("Remove {word}"))));
-                remove.setFrame(from_top(width - 34.0, top + 5.0, 22.0, 20.0, height));
-                document.addSubview(&remove);
-            }
+            let remove = cross_button(target, sel!(removeWord:), p.text2, mtm);
+            remove.setTag(index as isize);
+            remove.setToolTip(Some(&NSString::from_str(&format!("Remove {word}"))));
+            remove.setFrame(from_top(width - 32.0, top + 4.0, 28.0, 28.0, height));
+            document.addSubview(&remove);
         }
         self.list.setDocumentView(Some(&document));
         document.scrollPoint(CGPoint::new(0.0, height));

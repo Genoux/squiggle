@@ -8,20 +8,25 @@
 mod macos;
 
 use anyhow::{Result, bail};
-use gramly_core::{Config, Local, ai, config, protect};
+use gramly_core::{Config, Local, ai, config, improve, protect};
 use std::io::Read;
 
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
         None | Some("run") => run(),
-        Some("check") => check(args.iter().any(|a| a == "--local")),
+        Some("check") => check(
+            args.iter().any(|a| a == "--local"),
+            args.iter().any(|a| a == "--improve"),
+        ),
         #[cfg(target_os = "macos")]
         Some("doctor") => macos::doctor(),
         #[cfg(target_os = "macos")]
         Some("lab") => macos::lab(&args[1..]),
         #[cfg(target_os = "macos")]
         Some("lab-host") => macos::lab_host(),
+        #[cfg(target_os = "macos")]
+        Some("preview") => macos::preview(&args[1..]),
         Some("--version" | "-V") => {
             println!("gramly {}", env!("CARGO_PKG_VERSION"));
             Ok(())
@@ -31,8 +36,10 @@ fn main() -> Result<()> {
                 "gramly            run (menu bar app)\n\
                  gramly check      print suggestions for text on stdin\n\
                  gramly check --local   the on-device pass only, nothing sent\n\
+                 gramly check --improve   the clearer wording the app proposes\n\
                  gramly doctor     what Gramly can see in the focused field (macOS)\n\
                  gramly lab        audit accepting fixes in real text fields, off screen (macOS)\n\
+                 gramly preview [dir]   draw every card and the dictionary to PNG (macOS)\n\
                  gramly --version"
             );
             Ok(())
@@ -51,10 +58,26 @@ fn run() -> Result<()> {
     bail!("the Linux surface is not built yet; `gramly check` works everywhere")
 }
 
-fn check(local_only: bool) -> Result<()> {
+fn check(local_only: bool, improving: bool) -> Result<()> {
     let mut text = String::new();
     std::io::stdin().read_to_string(&mut text)?;
     let config = Config::load()?;
+    if improving {
+        let Some(key) = config.openrouter_key.as_deref() else {
+            bail!("improvements need the model, and there is no OpenRouter key");
+        };
+        let fixes = protect::keep(&text, improve::check(key, &text)?);
+        for fix in protect::keep_known(&text, fixes, &config::dictionary()) {
+            println!(
+                "{:>4}..{:<4} {:?} -> {:?}",
+                fix.start,
+                fix.end,
+                fix.original(&text),
+                fix.replacement
+            );
+        }
+        return Ok(());
+    }
     let mut local = Local::new(config.harper_dialect());
     local.set_known_words(config::dictionary());
     // What the app draws once the model has answered: the model's fixes

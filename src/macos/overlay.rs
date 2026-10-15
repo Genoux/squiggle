@@ -2,35 +2,45 @@
 //! card. There is no Accept-all pill: Grammarly has none, and a badge in
 //! the corner of every field was noise.
 //!
-//! Both are non-activating panels. Clicking Accept must not take focus
+//! All three are non-activating panels. Clicking Accept must not take focus
 //! away from the field being corrected - an activating window would, the
 //! caret would leave the text, and the user would have to click back in to
-//! keep typing. The underline panel also ignores the mouse entirely, so
-//! clicks land on the text beneath it exactly as if it were not there.
+//! keep typing. The underline panel and the card's shadow ignore the mouse
+//! entirely, so clicks land on the text beneath them exactly as if they were
+//! not there.
 //!
-//! Nothing animates. Core Animation gives every new layer an implicit
-//! position animation, which drew each underline sliding in from the panel's
-//! corner; every layer change here sits inside a transaction with actions
-//! disabled, and the panels have no window animation either.
+//! Layer changes sit inside a transaction with actions disabled: Core
+//! Animation gives every new layer an implicit position animation, which
+//! drew each underline sliding in from the panel's corner. The one motion is
+//! deliberate: the card fades in (`fade_in`), with an explicit animation.
 
-use crate::macos::theme;
+use crate::macos::theme::{self, Palette, Rgba, Weight};
+use gramly_core::diff::{Piece, pieces};
 use gramly_core::{Fix, Kind, Source};
 use objc2::rc::Retained;
-use objc2::runtime::{AnyObject, Sel};
-use objc2::{AnyThread, MainThreadMarker, MainThreadOnly};
+use objc2::runtime::{AnyObject, Bool, Sel};
+use objc2::{AnyThread, MainThreadMarker, MainThreadOnly, sel};
 use objc2_app_kit::{
-    NSAppearance, NSAppearanceCustomization, NSAppearanceNameDarkAqua, NSBackingStoreType,
-    NSButton, NSColor, NSFont, NSFontAttributeName, NSFontWeightMedium, NSFontWeightRegular,
-    NSFontWeightSemibold, NSForegroundColorAttributeName, NSLineBreakMode, NSPanel, NSScreen,
-    NSStatusWindowLevel, NSStrikethroughColorAttributeName, NSStrikethroughStyleAttributeName,
-    NSTextField, NSView, NSWindowAnimationBehavior, NSWindowCollectionBehavior, NSWindowStyleMask,
+    NSBackingStoreType, NSBaselineOffsetAttributeName, NSButton, NSColor, NSFontAttributeName,
+    NSForegroundColorAttributeName, NSLayoutManager, NSLineBreakMode, NSMutableParagraphStyle,
+    NSPanel, NSParagraphStyleAttributeName, NSScreen, NSStatusWindowLevel,
+    NSStrikethroughColorAttributeName, NSStrikethroughStyleAttributeName, NSTextContainer,
+    NSTextField, NSTextStorage, NSTextView, NSView, NSWindowAnimationBehavior,
+    NSWindowCollectionBehavior, NSWindowStyleMask,
 };
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};
+use objc2_core_graphics::CGPath;
 use objc2_foundation::{
-    NSAttributedString, NSAttributedStringKey, NSDictionary, NSMutableAttributedString, NSNumber,
-    NSString,
+    NSAttributedString, NSAttributedStringKey, NSDictionary, NSMutableAttributedString, NSNotFound,
+    NSNumber, NSRange, NSString,
 };
-use objc2_quartz_core::{CALayer, CATransaction};
+use objc2_quartz_core::{
+    CABasicAnimation, CALayer, CAMediaTiming, CAMediaTimingFunction, CATransaction,
+    kCAMediaTimingFunctionEaseOut,
+};
+use std::cell::RefCell;
+use std::ptr::NonNull;
+use std::rc::Rc;
 
 /// One underline, already in Cocoa screen coordinates.
 #[derive(Debug, Clone, PartialEq)]
@@ -38,7 +48,7 @@ pub struct Mark {
     pub rect: CGRect,
     pub kind: Kind,
     pub highlighted: bool,
-    /// Just accepted: a green glow and no underline.
+    /// Just accepted: a grey glow and no underline.
     pub flash: bool,
 }
 
@@ -88,7 +98,7 @@ fn still<T>(change: impl FnOnce() -> T) -> T {
     result
 }
 
-fn panel(mtm: MainThreadMarker, interactive: bool) -> Retained<NSPanel> {
+fn panel(mtm: MainThreadMarker, interactive: bool, level: isize) -> Retained<NSPanel> {
     let frame = CGRect::new(CGPoint::new(0.0, 0.0), CGSize::new(10.0, 10.0));
     let panel = NSPanel::initWithContentRect_styleMask_backing_defer(
         NSPanel::alloc(mtm),
@@ -99,13 +109,14 @@ fn panel(mtm: MainThreadMarker, interactive: bool) -> Retained<NSPanel> {
     );
     panel.setOpaque(false);
     panel.setBackgroundColor(Some(&NSColor::clearColor()));
-    panel.setHasShadow(interactive);
+    // Gramly draws the card's shadow itself (`shade`), so it is the same on
+    // Linux; the system's would sit under it.
+    panel.setHasShadow(false);
     panel.setIgnoresMouseEvents(!interactive);
-    // The card sits one level above the underlines, so a line from
-    // the text under the card never crosses it. Not `setFloatingPanel`: it
-    // resets the level to NSFloatingWindowLevel, which put every panel on
-    // one level and drew underlines over the card whenever they redrew last.
-    panel.setLevel(NSStatusWindowLevel + interactive as isize);
+    // Not `setFloatingPanel`: it resets the level to NSFloatingWindowLevel,
+    // which put every panel on one level and drew underlines over the card
+    // whenever they redrew last.
+    panel.setLevel(level);
     panel.setAnimationBehavior(NSWindowAnimationBehavior::None);
     // An accessory app is never active, and a panel that hides on
     // deactivation would therefore never show at all.
@@ -118,61 +129,20 @@ fn panel(mtm: MainThreadMarker, interactive: bool) -> Retained<NSPanel> {
             | NSWindowCollectionBehavior::Stationary
             | NSWindowCollectionBehavior::IgnoresCycle,
     );
-    if let Some(dark) = NSAppearance::appearanceNamed(unsafe { NSAppearanceNameDarkAqua }) {
-        panel.setAppearance(Some(&dark));
-    }
     let view = NSView::initWithFrame(NSView::alloc(mtm), frame);
     view.setWantsLayer(true);
     panel.setContentView(Some(&view));
     panel
 }
 
-fn surface(layer: &CALayer, radius: f64) {
-    layer.setBackgroundColor(Some(&theme::cg(theme::SURFACE)));
-    layer.setCornerRadius(radius);
-    layer.setBorderWidth(1.0);
-    layer.setBorderColor(Some(&theme::cg(theme::EDGE)));
+fn layer_view(frame: CGRect, mtm: MainThreadMarker) -> Retained<NSView> {
+    let view = NSView::initWithFrame(NSView::alloc(mtm), frame);
+    view.setWantsLayer(true);
+    view
 }
 
-/// One run of styled text.
-struct Run<'a> {
-    text: &'a str,
-    color: theme::Rgba,
-    size: f64,
-    weight: f64,
-    struck: bool,
-}
-
-fn styled(runs: &[Run]) -> Retained<NSMutableAttributedString> {
-    let out = NSMutableAttributedString::new();
-    for run in runs {
-        let font = NSFont::systemFontOfSize_weight(run.size, run.weight);
-        let color = theme::ns(run.color);
-        let one = NSNumber::new_isize(1);
-        let mut keys: Vec<&NSAttributedStringKey> =
-            unsafe { vec![NSFontAttributeName, NSForegroundColorAttributeName] };
-        let mut values: Vec<&AnyObject> = vec![&font, &color];
-        if run.struck {
-            keys.push(unsafe { NSStrikethroughStyleAttributeName });
-            keys.push(unsafe { NSStrikethroughColorAttributeName });
-            values.push(&one);
-            values.push(&color);
-        }
-        let attributes = NSDictionary::from_slices(&keys, &values);
-        let piece = unsafe {
-            NSAttributedString::initWithString_attributes(
-                NSAttributedString::alloc(),
-                &NSString::from_str(run.text),
-                Some(&attributes),
-            )
-        };
-        out.appendAttributedString(&piece);
-    }
-    out
-}
-
-fn label(runs: &[Run], mtm: MainThreadMarker) -> Retained<NSTextField> {
-    NSTextField::labelWithAttributedString(&styled(runs), mtm)
+fn with_alpha(c: Rgba, a: f64) -> Rgba {
+    Rgba { a, ..c }
 }
 
 pub struct Overlay {
@@ -180,9 +150,13 @@ pub struct Overlay {
     marks_panel: Retained<NSPanel>,
     drawn: Vec<Mark>,
     card: Retained<NSPanel>,
+    /// The card's shadow, in a panel of its own that ignores the mouse: in
+    /// the card's panel, the shadow's pixels would take clicks meant for the
+    /// text below the card.
+    shade: Retained<NSPanel>,
     /// The fix the card is showing.
     pub card_for: Option<usize>,
-    /// The card's hoverable rows, and which one the pointer is over.
+    /// The card's buttons, and which one the pointer is over.
     rows: Vec<Row>,
     lit: Option<usize>,
 }
@@ -191,9 +165,12 @@ impl Overlay {
     pub fn new(mtm: MainThreadMarker) -> Self {
         Self {
             mtm,
-            marks_panel: panel(mtm, false),
+            marks_panel: panel(mtm, false, NSStatusWindowLevel),
             drawn: Vec::new(),
-            card: panel(mtm, true),
+            // One level above the underlines, so a line from the text under
+            // the card never crosses it.
+            card: panel(mtm, true, NSStatusWindowLevel + 1),
+            shade: panel(mtm, false, NSStatusWindowLevel),
             card_for: None,
             rows: Vec::new(),
             lit: None,
@@ -223,20 +200,23 @@ impl Overlay {
             for mark in &marks {
                 let x = mark.rect.origin.x - area.origin.x;
                 let y = mark.rect.origin.y - area.origin.y;
-                let color = if mark.flash {
-                    theme::ACCENT
+                let color = theme::kind(mark.kind);
+                let fill = if mark.flash {
+                    Some(theme::ACCEPTED)
+                } else if mark.highlighted {
+                    Some(with_alpha(color, 0.16))
                 } else {
-                    theme::kind(mark.kind)
+                    None
                 };
-                if mark.highlighted {
-                    let fill = CALayer::new();
-                    fill.setFrame(CGRect::new(
+                if let Some(fill) = fill {
+                    let layer = CALayer::new();
+                    layer.setFrame(CGRect::new(
                         CGPoint::new(x - 1.0, y),
                         CGSize::new(mark.rect.size.width + 2.0, mark.rect.size.height),
                     ));
-                    fill.setBackgroundColor(Some(&theme::cg(theme::Rgba { a: 0.2, ..color })));
-                    fill.setCornerRadius(3.0);
-                    root.addSublayer(&fill);
+                    layer.setBackgroundColor(Some(&theme::cg(fill)));
+                    layer.setCornerRadius(3.0);
+                    root.addSublayer(&layer);
                 }
                 if mark.flash {
                     continue;
@@ -262,7 +242,7 @@ impl Overlay {
         self.drawn.clear();
     }
 
-    /// The card's rows as (action, frame on screen in Cocoa coordinates),
+    /// The card's buttons as (action, frame on screen in Cocoa coordinates),
     /// for `GRAMLY_STATE`.
     pub fn card_rows(&self) -> Vec<(String, CGRect)> {
         if !self.card.isVisible() {
@@ -288,10 +268,10 @@ impl Overlay {
         self.card.isVisible().then(|| self.card.frame())
     }
 
-    /// The card for the hovered suggestion. One fix in its sentence gets the
-    /// small card - a title, the replacement to click, Dismiss. Two or more
-    /// get the sentence card: the whole sentence with every change in place
-    /// and one "Correct the sentence" button.
+    /// The card for the hovered suggestion: its sentence with the change in
+    /// place, then its buttons. One fix or several, a correction or clearer
+    /// wording, the layout is the same; only the title and the buttons
+    /// change.
     ///
     /// `group` is every fix in the hovered fix's sentence, by index, in order.
     pub fn show_card(
@@ -305,23 +285,19 @@ impl Overlay {
         if self.card_for == Some(index) && self.card.isVisible() {
             return;
         }
-        let Some((_, fix)) = group.iter().find(|(i, _)| *i == index) else {
+        let palette = theme::palette(self.mtm);
+        let Some(card) = card(index, group, text, target, palette, self.mtm) else {
             return;
         };
-        let (view, rows) = if group.len() > 1 {
-            sentence_card(index, group, text, target, self.mtm)
-        } else {
-            word_card(index, fix, text, target, self.mtm)
-        };
-        self.rows = rows;
+        self.rows = card.rows;
         self.lit = None;
-        let size = view.frame().size;
-        self.card.setContentView(Some(&view));
+        let size = card.view.frame().size;
+        self.card.setContentView(Some(&card.view));
 
         // Close under the word: the less there is to cross, the less there is
-        // to fall into.
-        let gap = 4.0;
-        let mut origin = CGPoint::new(word.origin.x - 12.0, word.origin.y - gap - size.height);
+        // to fall into. Shifted left so the card's text starts near the word.
+        let gap = 6.0;
+        let mut origin = CGPoint::new(word.origin.x - PAD, word.origin.y - gap - size.height);
         // Kept on the word's screen: a word near the right edge of a Slack
         // window put the sentence card half off it. Shifted sideways rather
         // than flipped, so it stays close to the word; above the word only
@@ -329,12 +305,30 @@ impl Overlay {
         const MARGIN: f64 = 8.0;
         let area = screen_around(word, self.mtm);
         let (low, high) = (area.origin.y, area.origin.y + area.size.height);
-        if origin.y < low + MARGIN {
+        let below = origin.y >= low + MARGIN;
+        if !below {
             origin.y = (word.origin.y + word.size.height + gap).min(high - size.height - MARGIN);
         }
         let right = area.origin.x + area.size.width - size.width - MARGIN;
         origin.x = origin.x.min(right).max(area.origin.x + MARGIN);
-        self.card.setFrame_display(CGRect::new(origin, size), true);
+        let frame = CGRect::new(origin, size);
+
+        let shade = shade(size, palette, self.mtm);
+        self.shade.setContentView(Some(&shade));
+        self.shade.setFrame_display(
+            CGRect::new(
+                CGPoint::new(origin.x - SHADE.0, origin.y - SHADE.3),
+                shade.frame().size,
+            ),
+            true,
+        );
+        self.card.setFrame_display(frame, true);
+        // Settling towards its word: down onto a card below it, up onto
+        // one above.
+        let from = if below { 3.0 } else { -3.0 };
+        fade_in(&shade, from);
+        fade_in(&card.view, from);
+        self.shade.orderFrontRegardless();
         self.card.orderFrontRegardless();
         self.card_for = Some(index);
     }
@@ -343,15 +337,19 @@ impl Overlay {
         if self.card.isVisible() {
             self.card.orderOut(None);
         }
+        if self.shade.isVisible() {
+            self.shade.orderOut(None);
+        }
         self.card_for = None;
         self.rows.clear();
         self.lit = None;
     }
 
-    /// Lights the row under the pointer. Driven by the same poll as the
+    /// Lights the button under the pointer. Driven by the same poll as the
     /// underlines: the card never becomes key, so it gets no tracking-area
     /// events of its own. The fade is short - long enough to read as a
-    /// response, short enough that sweeping down the rows does not trail.
+    /// response, short enough that sweeping across the buttons does not
+    /// trail.
     pub fn hover(&mut self, mouse: CGPoint) {
         if !self.card.isVisible() {
             return;
@@ -366,12 +364,9 @@ impl Overlay {
             return;
         }
         CATransaction::begin();
-        CATransaction::setAnimationDuration(0.12);
+        CATransaction::setAnimationDuration(0.1);
         for (i, row) in self.rows.iter().enumerate() {
-            if let Some(layer) = row.view.layer() {
-                let color = if Some(i) == now { row.hover } else { row.rest };
-                layer.setBackgroundColor(Some(&theme::cg(color)));
-            }
+            row.light(Some(i) == now);
         }
         CATransaction::commit();
         self.lit = now;
@@ -383,40 +378,122 @@ impl Overlay {
     }
 }
 
-/// A row of the card that lights on hover and acts on click: a container
-/// view whose layer is the highlight, its content, and a transparent button
-/// over the whole of it, so the row is the target and not just its words.
+/// The card's fade: 140ms, moving the last 3pt (`from`, up positive)
+/// towards its word. Explicit, so the transactions that keep everything else
+/// still do not stop it.
+fn fade_in(view: &NSView, from: f64) {
+    let Some(layer) = view.layer() else {
+        return;
+    };
+    let ease = CAMediaTimingFunction::functionWithName(unsafe { kCAMediaTimingFunctionEaseOut });
+    for (path, from) in [("opacity", 0.0), ("transform.translation.y", from)] {
+        let animation = CABasicAnimation::animationWithKeyPath(Some(&NSString::from_str(path)));
+        unsafe {
+            animation.setFromValue(Some(&NSNumber::new_f64(from)));
+            animation.setToValue(Some(&NSNumber::new_f64(0.0)));
+        }
+        if path == "opacity" {
+            unsafe { animation.setToValue(Some(&NSNumber::new_f64(1.0))) };
+        }
+        animation.setDuration(0.14);
+        animation.setTimingFunction(Some(&ease));
+        layer.addAnimation_forKey(&animation, Some(&NSString::from_str(path)));
+    }
+}
+
+/// A button of the card: a container whose layer is the fill and outline,
+/// its label, and a transparent button over the whole of it, so the button
+/// is the target and not just its words.
 struct Row {
     view: Retained<NSView>,
-    rest: theme::Rgba,
-    hover: theme::Rgba,
+    rest: Rgba,
+    hover: Rgba,
+    /// The outline at rest; it gives way to the fill under the pointer.
+    line: Option<Rgba>,
     /// What clicking it does ("accept:", "dismiss:"), for `GRAMLY_STATE`.
     action: Sel,
 }
 
-const CLEAR: theme::Rgba = theme::Rgba {
-    r: 0.0,
-    g: 0.0,
-    b: 0.0,
-    a: 0.0,
-};
+impl Row {
+    fn light(&self, lit: bool) {
+        let Some(layer) = self.view.layer() else {
+            return;
+        };
+        let fill = if lit { self.hover } else { self.rest };
+        layer.setBackgroundColor(Some(&theme::cg(fill)));
+        if let Some(line) = self.line {
+            layer.setBorderColor(Some(&theme::cg(if lit { theme::CLEAR } else { line })));
+        }
+    }
+}
 
-fn row(
-    frame: CGRect,
-    rest: theme::Rgba,
-    hover: theme::Rgba,
+/// Every button: 32 high, 8 corners, 12 at the sides.
+const BUTTON_H: f64 = 32.0;
+const BUTTON_SIDE: f64 = 12.0;
+
+fn label(
+    text: &str,
+    size: f64,
+    weight: Weight,
+    color: Rgba,
+    mtm: MainThreadMarker,
+) -> Retained<NSTextField> {
+    let label = NSTextField::labelWithString(&NSString::from_str(text), mtm);
+    label.setFont(Some(&theme::font(size, weight)));
+    label.setTextColor(Some(&theme::ns(color)));
+    label.setLineBreakMode(NSLineBreakMode::ByTruncatingTail);
+    label
+}
+
+/// One button, its left edge at `x` and its bottom at `y`.
+#[allow(clippy::too_many_arguments)]
+fn button(
+    words: &str,
+    primary: bool,
+    x: f64,
+    y: f64,
     action: Sel,
     tag: isize,
     target: &AnyObject,
+    p: &Palette,
     mtm: MainThreadMarker,
 ) -> Row {
-    let view = NSView::initWithFrame(NSView::alloc(mtm), frame);
-    view.setWantsLayer(true);
+    let caption = if primary {
+        label(words, 13.5, Weight::Semibold, p.on_ink, mtm)
+    } else {
+        label(words, 13.5, Weight::Medium, p.text, mtm)
+    };
+    let fit = caption.fittingSize();
+    let width = fit.width.ceil() + BUTTON_SIDE * 2.0;
+    let view = layer_view(
+        CGRect::new(CGPoint::new(x, y), CGSize::new(width, BUTTON_H)),
+        mtm,
+    );
+    caption.setFrame(CGRect::new(
+        CGPoint::new(BUTTON_SIDE, ((BUTTON_H - fit.height) / 2.0).round()),
+        CGSize::new(fit.width.ceil(), fit.height),
+    ));
+    view.addSubview(&caption);
+    let (rest, hover, line) = if primary {
+        (p.ink, p.ink_hover, None)
+    } else {
+        (theme::CLEAR, p.fill, Some(p.line))
+    };
+    let row = Row {
+        view,
+        rest,
+        hover,
+        line,
+        action,
+    };
     still(|| {
-        if let Some(layer) = view.layer() {
+        if let Some(layer) = row.view.layer() {
             layer.setCornerRadius(8.0);
-            layer.setBackgroundColor(Some(&theme::cg(rest)));
+            if line.is_some() {
+                layer.setBorderWidth(1.0);
+            }
         }
+        row.light(false);
     });
     let cover = unsafe {
         NSButton::buttonWithTitle_target_action(
@@ -429,371 +506,654 @@ fn row(
     cover.setTag(tag);
     cover.setBordered(false);
     cover.setTransparent(true);
-    cover.setFrame(CGRect::new(CGPoint::new(0.0, 0.0), frame.size));
-    // Added last by `finish`, so it sits above the row's content.
-    Row {
-        view,
-        rest,
-        hover,
-        action,
-    }
-    .with_cover(cover)
+    cover.setFrame(CGRect::new(CGPoint::new(0.0, 0.0), row.view.frame().size));
+    row.view.addSubview(&cover);
+    row
 }
 
-impl Row {
-    fn with_cover(self, cover: Retained<NSButton>) -> Self {
-        self.view.addSubview(&cover);
-        self
-    }
-
-    /// Adds content under the cover button.
-    fn add(&self, content: &NSView) {
-        let cover = self.view.subviews().lastObject();
-        match cover {
-            Some(cover) => self.view.addSubview_positioned_relativeTo(
-                content,
-                objc2_app_kit::NSWindowOrderingMode::Below,
-                Some(&cover),
-            ),
-            None => self.view.addSubview(content),
-        }
-    }
+/// A button in the card's style for other windows, at the origin. It does
+/// not light under the pointer: only the card polls for that.
+pub(crate) fn plain_button(
+    words: &str,
+    primary: bool,
+    action: Sel,
+    target: &AnyObject,
+    p: &Palette,
+    mtm: MainThreadMarker,
+) -> Retained<NSView> {
+    button(words, primary, 0.0, 0.0, action, 0, target, p, mtm).view
 }
 
-fn icon(symbol: &str, color: theme::Rgba, mtm: MainThreadMarker) -> Option<Retained<NSView>> {
-    let image = objc2_app_kit::NSImage::imageWithSystemSymbolName_accessibilityDescription(
-        &NSString::from_str(symbol),
-        None,
-    )?;
-    image.setTemplate(true);
-    let view = objc2_app_kit::NSImageView::imageViewWithImage(&image, mtm);
-    view.setContentTintColor(Some(&theme::ns(color)));
-    Some(Retained::into_super(Retained::into_super(view)))
-}
-
-/// What the small card says above the replacement. The model's titles are
-/// written for this; Harper's messages are written for a list ("Did you mean
-/// to spell recieve this way?") and read oddly as a title, so local fixes get
-/// a plain one.
-fn title(fix: &Fix) -> String {
+/// The title. The model's titles are written for this; Harper's messages are
+/// written for a list ("Did you mean to spell recieve this way?") and read
+/// oddly as a title, so local fixes get a plain one.
+fn title(fix: &Fix, text: &str) -> String {
+    let original = fix.original(text);
+    // A doubled space's card: the change is invisible, the title says it.
+    if !original.is_empty()
+        && original.chars().all(char::is_whitespace)
+        && fix.replacement.chars().all(char::is_whitespace)
+    {
+        return "Correct your spacing".into();
+    }
     if fix.source == Source::Ai && !fix.message.is_empty() {
         return fix.message.clone();
     }
     match fix.kind {
         Kind::Spelling => "Correct your spelling",
         Kind::Correctness => "Correct your grammar",
-        Kind::Clarity => "Improve clarity",
+        Kind::Clarity => gramly_core::improve::TITLE,
     }
     .to_string()
 }
 
-fn card_view(width: f64, height: f64, mtm: MainThreadMarker) -> Retained<NSView> {
-    let view = NSView::initWithFrame(
-        NSView::alloc(mtm),
-        CGRect::new(CGPoint::new(0.0, 0.0), CGSize::new(width, height)),
+/// Space around the card's content.
+const PAD: f64 = 16.0;
+/// The card's width, the same for every suggestion.
+const WIDTH: f64 = 340.0;
+/// Between the title and the sentence, and between the sentence and the
+/// buttons.
+const UNDER_TITLE: f64 = 10.0;
+const ABOVE_BUTTONS: f64 = 16.0;
+const BETWEEN: f64 = 8.0;
+/// The title's line.
+const TITLE_H: f64 = 18.0;
+
+pub(crate) struct Card {
+    pub view: Retained<NSView>,
+    rows: Vec<Row>,
+}
+
+/// Builds the card for the fix at `index`; None if it is not in `group`.
+pub(crate) fn card(
+    index: usize,
+    group: &[(usize, Fix)],
+    text: &str,
+    target: &AnyObject,
+    p: &Palette,
+    mtm: MainThreadMarker,
+) -> Option<Card> {
+    let (_, fix) = group.iter().find(|(i, _)| *i == index)?;
+    let tag = index as isize;
+    let accept = ("Accept", sel!(accept:));
+    let dismiss = ("Dismiss", sel!(dismiss:));
+    // Clarity first: its card is never part of "Correct the sentence".
+    let (heading, dot, members, actions): (String, Rgba, Vec<&Fix>, Vec<(&str, Sel)>) =
+        if fix.kind == Kind::Clarity {
+            (
+                gramly_core::improve::TITLE.into(),
+                theme::ADVICE,
+                vec![fix],
+                vec![accept, dismiss],
+            )
+        } else if group.len() > 1 {
+            (
+                "Correct the sentence".into(),
+                theme::MISTAKE,
+                group.iter().map(|(_, f)| f).collect(),
+                vec![
+                    ("Correct the sentence", sel!(acceptSentence:)),
+                    ("Dismiss", sel!(dismissSentence:)),
+                ],
+            )
+        } else {
+            let mut actions = vec![accept, dismiss];
+            if fix.kind == Kind::Spelling {
+                actions.push(("Add to dictionary", sel!(learn:)));
+            }
+            (title(fix, text), theme::kind(fix.kind), vec![fix], actions)
+        };
+
+    let inner = WIDTH - PAD * 2.0;
+    let (sentence, sentence_h) = sentence_view(&snippet(text, &members), inner, p, mtm);
+
+    // Buttons left to right, wrapping in the rare case they do not fit.
+    let mut placed: Vec<(Row, usize)> = Vec::new();
+    let mut line = 0;
+    let mut x = PAD;
+    for (i, (words, action)) in actions.iter().enumerate() {
+        let row = button(words, i == 0, 0.0, 0.0, *action, tag, target, p, mtm);
+        let w = row.view.frame().size.width;
+        if x > PAD && x + w > WIDTH - PAD {
+            line += 1;
+            x = PAD;
+        }
+        row.view.setFrameOrigin(CGPoint::new(x, 0.0));
+        x += w + BETWEEN;
+        placed.push((row, line));
+    }
+    let lines = (line + 1) as f64;
+    let buttons_h = lines * BUTTON_H + (lines - 1.0) * BETWEEN;
+    let height = PAD + TITLE_H + UNDER_TITLE + sentence_h + ABOVE_BUTTONS + buttons_h + PAD;
+
+    let view = layer_view(
+        CGRect::new(CGPoint::new(0.0, 0.0), CGSize::new(WIDTH, height)),
+        mtm,
     );
-    view.setWantsLayer(true);
     still(|| {
         if let Some(layer) = view.layer() {
-            surface(&layer, 12.0);
+            layer.setBackgroundColor(Some(&theme::cg(p.surface)));
+            layer.setCornerRadius(12.0);
+            // A hairline, not a border: half a point is one pixel on a
+            // Retina screen.
+            layer.setBorderWidth(0.5);
+            layer.setBorderColor(Some(&theme::cg(p.edge)));
+        }
+    });
+
+    let mut top = height - PAD;
+    let marker = layer_view(
+        CGRect::new(
+            CGPoint::new(PAD, top - TITLE_H / 2.0 - 3.5),
+            CGSize::new(7.0, 7.0),
+        ),
+        mtm,
+    );
+    still(|| {
+        if let Some(layer) = marker.layer() {
+            layer.setBackgroundColor(Some(&theme::cg(dot)));
+            layer.setCornerRadius(3.5);
+        }
+    });
+    view.addSubview(&marker);
+    let heading = label(&heading, 13.0, Weight::Medium, p.text2, mtm);
+    let heading_h = heading.fittingSize().height;
+    heading.setFrame(CGRect::new(
+        CGPoint::new(
+            PAD + 15.0,
+            top - TITLE_H + ((TITLE_H - heading_h) / 2.0).round(),
+        ),
+        CGSize::new(inner - 15.0, heading_h),
+    ));
+    view.addSubview(&heading);
+    top -= TITLE_H + UNDER_TITLE + sentence_h;
+    sentence.setFrameOrigin(CGPoint::new(PAD, top));
+    view.addSubview(&sentence);
+
+    let mut rows = Vec::new();
+    for (row, line) in placed {
+        let y = PAD + buttons_h - BUTTON_H - line as f64 * (BUTTON_H + BETWEEN);
+        row.view
+            .setFrameOrigin(CGPoint::new(row.view.frame().origin.x, y));
+        view.addSubview(&row.view);
+        rows.push(row);
+    }
+    Some(Card { view, rows })
+}
+
+/// How far the shadow reaches past the card: left, right, top, bottom.
+pub(crate) const SHADE: (f64, f64, f64, f64) = (40.0, 40.0, 24.0, 64.0);
+
+/// The card's shadow: a tight one at its edge and a soft one below, drawn
+/// from paths so nothing else is painted.
+pub(crate) fn shade(size: CGSize, p: &Palette, mtm: MainThreadMarker) -> Retained<NSView> {
+    let view = layer_view(
+        CGRect::new(
+            CGPoint::new(0.0, 0.0),
+            CGSize::new(
+                size.width + SHADE.0 + SHADE.1,
+                size.height + SHADE.2 + SHADE.3,
+            ),
+        ),
+        mtm,
+    );
+    let card = CGRect::new(CGPoint::new(SHADE.0, SHADE.3), size);
+    // (inset, drop, blur, strength)
+    let tight = (0.0, 1.0, 2.0, p.shadow * 0.4);
+    let soft = (12.0, 18.0, 22.0, p.shadow);
+    still(|| {
+        let Some(root) = view.layer() else {
+            return;
+        };
+        for (inset, drop, blur, strength) in [tight, soft] {
+            let layer = CALayer::new();
+            layer.setFrame(view.bounds());
+            let shape = CGRect::new(
+                CGPoint::new(card.origin.x + inset, card.origin.y + inset),
+                CGSize::new(
+                    card.size.width - inset * 2.0,
+                    card.size.height - inset * 2.0,
+                ),
+            );
+            let path = unsafe { CGPath::with_rounded_rect(shape, 12.0, 12.0, std::ptr::null()) };
+            layer.setShadowPath(Some(&path));
+            layer.setShadowColor(Some(&theme::cg(Rgba {
+                r: 0.0,
+                g: 0.0,
+                b: 0.0,
+                a: 1.0,
+            })));
+            layer.setShadowOpacity(strength);
+            layer.setShadowRadius(blur);
+            layer.setShadowOffset(CGSize::new(0.0, -drop));
+            root.addSublayer(&layer);
         }
     });
     view
 }
 
-/// Space between the card's edge and its rows.
-const EDGE_PAD: f64 = 6.0;
-/// Space inside a row; title, replacement and the action labels all start
-/// at this inset so they share one left edge.
-const ROW_PAD: f64 = 12.0;
-
-/// The suggestion as one big target - title over the replacement - then a
-/// Dismiss row and, for a spelling, an Add to dictionary row. The rows are
-/// the whole interface: no buttons to aim at.
-fn word_card(
-    index: usize,
-    fix: &Fix,
-    text: &str,
-    target: &AnyObject,
-    mtm: MainThreadMarker,
-) -> (Retained<NSView>, Vec<Row>) {
-    let tag = index as isize;
-    let regular = unsafe { NSFontWeightRegular };
-    let medium = unsafe { NSFontWeightMedium };
-    let bold = unsafe { NSFontWeightSemibold };
-
-    let original = fix.original(text);
-    // A doubled space's replacement is one space: shown as it is, the card's
-    // main line was blank, an empty box under the title.
-    // Only when the fix removes spaces and adds nothing else: spaces turned
-    // into ", " are shown as the word with its comma, not as a removal.
-    let spacing = !original.is_empty()
-        && original.chars().all(char::is_whitespace)
-        && fix.replacement.chars().all(char::is_whitespace);
-    let heading = label(
-        &[Run {
-            text: &if spacing {
-                "Correct your spacing".to_string()
-            } else {
-                title(fix)
-            },
-            color: theme::MUTED,
-            size: 13.0,
-            weight: regular,
-            struck: false,
-        }],
-        mtm,
-    );
-    heading.setLineBreakMode(NSLineBreakMode::ByTruncatingTail);
-    let shown = if spacing {
-        "Remove the extra space".to_string()
-    } else if fix.replacement.is_empty() {
-        format!("Remove “{original}”")
-    } else {
-        fix.replacement.clone()
-    };
-    let choice = label(
-        &[Run {
-            text: &shown,
-            color: theme::ACCENT,
-            size: 18.0,
-            weight: bold,
-            struck: false,
-        }],
-        mtm,
-    );
-    choice.setLineBreakMode(NSLineBreakMode::ByTruncatingTail);
-
-    let mut actions: Vec<(&str, &str, Sel)> = vec![("trash", "Dismiss", objc2::sel!(dismiss:))];
-    if fix.kind == Kind::Spelling {
-        actions.push(("book.closed", "Add to dictionary", objc2::sel!(learn:)));
-    }
-
-    let content = heading
-        .fittingSize()
-        .width
-        .max(choice.fittingSize().width)
-        .max(150.0);
-    let width = (content + (ROW_PAD + EDGE_PAD) * 2.0).clamp(240.0, 360.0);
-    let row_w = width - EDGE_PAD * 2.0;
-    let inner = row_w - ROW_PAD * 2.0;
-    let main_h = 64.0;
-    let action_h = 36.0;
-    let height = EDGE_PAD * 2.0 + main_h + action_h * actions.len() as f64;
-    let view = card_view(width, height, mtm);
-    let mut rows = Vec::new();
-
-    let mut top = height - EDGE_PAD - main_h;
-    let main = row(
-        CGRect::new(CGPoint::new(EDGE_PAD, top), CGSize::new(row_w, main_h)),
-        CLEAR,
-        theme::HOVER,
-        objc2::sel!(accept:),
-        tag,
-        target,
-        mtm,
-    );
-    heading.setFrame(CGRect::new(
-        CGPoint::new(ROW_PAD, main_h - 12.0 - 16.0),
-        CGSize::new(inner, 16.0),
-    ));
-    choice.setFrame(CGRect::new(
-        CGPoint::new(ROW_PAD, 10.0),
-        CGSize::new(inner, 24.0),
-    ));
-    main.add(&heading);
-    main.add(&choice);
-    view.addSubview(&main.view);
-    rows.push(main);
-
-    for (symbol, words, action) in actions {
-        top -= action_h;
-        let action_row = row(
-            CGRect::new(CGPoint::new(EDGE_PAD, top), CGSize::new(row_w, action_h)),
-            CLEAR,
-            theme::HOVER,
-            action,
-            tag,
-            target,
-            mtm,
-        );
-        let mut x = ROW_PAD;
-        if let Some(glyph) = icon(symbol, theme::MUTED, mtm) {
-            glyph.setFrame(CGRect::new(
-                CGPoint::new(x, (action_h - 16.0) / 2.0),
-                CGSize::new(16.0, 16.0),
-            ));
-            action_row.add(&glyph);
-            x += 26.0;
-        }
-        let caption = label(
-            &[Run {
-                text: words,
-                color: theme::TEXT,
-                size: 14.0,
-                weight: medium,
-                struck: false,
-            }],
-            mtm,
-        );
-        caption.setFrame(CGRect::new(
-            CGPoint::new(x, (action_h - 18.0) / 2.0),
-            CGSize::new(inner - x, 18.0),
-        ));
-        action_row.add(&caption);
-        view.addSubview(&action_row.view);
-        rows.push(action_row);
-    }
-    (view, rows)
+/// A piece of the card's sentence.
+#[derive(Debug, Clone, PartialEq)]
+enum Bit {
+    Same(String),
+    /// What goes, struck.
+    Gone(String),
+    /// What comes in, on a fill.
+    New(String),
 }
 
-/// The sentence with every change in place - struck in red, the
-/// replacement in green - then "Correct the sentence" and Dismiss.
-fn sentence_card(
-    index: usize,
-    group: &[(usize, Fix)],
-    text: &str,
-    target: &AnyObject,
-    mtm: MainThreadMarker,
-) -> (Retained<NSView>, Vec<Row>) {
-    let tag = index as isize;
-    let regular = unsafe { NSFontWeightRegular };
-    let medium = unsafe { NSFontWeightMedium };
-    let bold = unsafe { NSFontWeightSemibold };
-    let chars: Vec<char> = text.chars().collect();
-    let first = group.first().map(|(_, f)| f.start).unwrap_or(0);
-    let (from, to) = gramly_core::sentence(text, first);
-    let to = group.iter().map(|(_, f)| f.end).max().unwrap_or(to).max(to);
+/// Words of context kept on each side of the change.
+const CONTEXT: usize = 6;
+/// A space that is the whole change, shown so the card is never blank.
+const SPACE: &str = "\u{2423}";
 
-    let mut pieces: Vec<(String, theme::Rgba, f64, bool)> = Vec::new();
-    let mut cursor = from;
-    for (_, fix) in group {
+/// The sentence the fixes are in, with each change in place: the struck
+/// original and what replaces it. Cut to `CONTEXT` words either side, so a
+/// long sentence does not make a long card.
+///
+/// It replaced a lone replacement word. Out of its sentence, "it's" did not
+/// say why, and a removal had to be shown as what was left ("me the" for
+/// "send me the the link").
+fn snippet(text: &str, fixes: &[&Fix]) -> Vec<Bit> {
+    let chars: Vec<char> = text.chars().collect();
+    let mut fixes: Vec<&Fix> = fixes
+        .iter()
+        .copied()
+        .filter(|f| f.start <= f.end && f.end <= chars.len())
+        .collect();
+    fixes.sort_by_key(|f| f.start);
+    let Some(first) = fixes.first().map(|f| f.start) else {
+        return Vec::new();
+    };
+    let last = fixes.iter().map(|f| f.end).max().unwrap_or(first);
+    let (from, to) = gramly_core::sentence(text, first);
+    let (from, to) = (from.min(first), to.max(last).min(chars.len()));
+
+    let mut out = vec![Bit::Same(lead(&chars[from..first]))];
+    let mut cursor = first;
+    for fix in fixes {
         if fix.start < cursor {
             continue;
         }
-        pieces.push((
-            chars[cursor..fix.start].iter().collect(),
-            theme::TEXT,
-            regular,
-            false,
-        ));
+        out.push(Bit::Same(chars[cursor..fix.start].iter().collect()));
         let original: String = chars[fix.start..fix.end].iter().collect();
-        if !original.is_empty() {
-            pieces.push((original, theme::MISTAKE, regular, true));
-            if !fix.replacement.is_empty() {
-                pieces.push((" ".into(), theme::TEXT, regular, false));
+        for piece in bridged(pieces(&original, &fix.replacement)) {
+            match piece {
+                Piece::Same(same) => out.push(Bit::Same(same)),
+                Piece::Changed { was, now } => change(&mut out, &was, &now),
             }
-        }
-        if !fix.replacement.is_empty() {
-            pieces.push((fix.replacement.clone(), theme::ACCENT, bold, false));
         }
         cursor = fix.end;
     }
-    pieces.push((
-        chars[cursor..to.min(chars.len())].iter().collect(),
-        theme::TEXT,
-        regular,
-        false,
-    ));
-    let runs: Vec<Run> = pieces
-        .iter()
-        .map(|(t, color, weight, struck)| Run {
-            text: t,
-            color: *color,
-            size: 15.0,
-            weight: *weight,
-            struck: *struck,
-        })
-        .collect();
+    out.push(Bit::Same(trail(&chars[cursor..to.max(cursor)])));
 
-    let width = 380.0;
-    let pad = EDGE_PAD + ROW_PAD;
-    let inner = width - pad * 2.0;
-    let heading = label(
-        &[Run {
-            text: "Correct the sentence",
-            color: theme::MUTED,
-            size: 13.0,
-            weight: regular,
-            struck: false,
-        }],
-        mtm,
-    );
-    let body = label(&runs, mtm);
-    body.setLineBreakMode(NSLineBreakMode::ByWordWrapping);
-    body.setMaximumNumberOfLines(5);
-    body.setPreferredMaxLayoutWidth(inner);
-    let body_h = body.sizeThatFits(CGSize::new(inner, 400.0)).height.ceil();
+    // Merged and flattened: a sentence on a card is one line of thought.
+    let mut tidy: Vec<Bit> = Vec::new();
+    for bit in out {
+        match (tidy.last_mut(), bit) {
+            (_, Bit::Same(s)) if s.is_empty() => {}
+            (Some(Bit::Same(prev)), Bit::Same(s)) => prev.push_str(&s.replace('\n', " ")),
+            (_, Bit::Same(s)) => tidy.push(Bit::Same(s.replace('\n', " "))),
+            (_, other) => tidy.push(other),
+        }
+    }
+    tidy
+}
 
-    let button_h = 34.0;
-    let height = pad + 16.0 + 10.0 + body_h + 16.0 + button_h + EDGE_PAD + 8.0;
-    let view = card_view(width, height, mtm);
-    let mut top = height - pad - 16.0;
-    heading.setFrame(CGRect::new(
-        CGPoint::new(pad, top),
-        CGSize::new(inner, 16.0),
-    ));
-    top -= 10.0 + body_h;
-    body.setFrame(CGRect::new(
-        CGPoint::new(pad - 2.0, top),
-        CGSize::new(inner + 4.0, body_h),
-    ));
-    view.addSubview(&heading);
-    view.addSubview(&body);
+/// Two changes with one word kept between them, as one change. A rewrite
+/// shown word by word left "we" standing alone between two struck phrases
+/// ("~~it would maybe be better if~~ we ~~could try to~~ should"), which
+/// reads worse than the phrase struck and the new one beside it.
+fn bridged(pieces: Vec<Piece>) -> Vec<Piece> {
+    let mut out: Vec<Piece> = Vec::new();
+    for piece in pieces {
+        if let Piece::Changed { was, now } = &piece
+            && let [.., Piece::Changed { .. }, Piece::Same(kept)] = out.as_slice()
+            && !kept.trim().is_empty()
+            && !kept.trim().contains(char::is_whitespace)
+        {
+            let kept = kept.clone();
+            out.pop();
+            if let Some(Piece::Changed { was: w, now: n }) = out.last_mut() {
+                w.push_str(&kept);
+                w.push_str(was);
+                n.push_str(&kept);
+                n.push_str(now);
+                continue;
+            }
+        }
+        out.push(piece);
+    }
+    out
+}
 
-    let mut rows = Vec::new();
-    let y = EDGE_PAD + 8.0;
-    let caption = |words: &str, color: theme::Rgba, weight: f64| {
-        label(
-            &[Run {
-                text: words,
-                color,
-                size: 14.0,
-                weight,
-                struck: false,
-            }],
-            mtm,
-        )
+/// One changed stretch as bits. Spaces around a word stay plain text; a
+/// change of spaces alone is shown with `SPACE`.
+fn change(out: &mut Vec<Bit>, was: &str, now: &str) {
+    let blank = |s: &str| s.trim().is_empty();
+    if blank(was) && blank(now) {
+        let (gone, came) = (was.chars().count(), now.chars().count());
+        if gone > came {
+            // Spaced either side, so the mark does not cling to a word.
+            out.push(Bit::Same(now.into()));
+            out.push(Bit::Gone(SPACE.repeat(gone - came)));
+            out.push(Bit::Same(" ".into()));
+        } else {
+            out.push(Bit::Same(was.into()));
+            out.push(Bit::New(SPACE.repeat(came - gone)));
+        }
+        return;
+    }
+    let edges = |s: &str| {
+        let start = &s[..s.len() - s.trim_start().len()];
+        let end = &s[s.trim_end().len()..];
+        (start.to_string(), end.to_string())
     };
-    let correct_text = caption("Correct the sentence", theme::ON_ACCENT, bold);
-    let correct_w = correct_text.fittingSize().width + 32.0;
-    let correct = row(
-        CGRect::new(CGPoint::new(pad, y), CGSize::new(correct_w, button_h)),
-        theme::ACCENT,
-        theme::ACCENT_HOVER,
-        objc2::sel!(acceptSentence:),
-        tag,
-        target,
-        mtm,
-    );
-    correct_text.setFrame(CGRect::new(
-        CGPoint::new(16.0, (button_h - 18.0) / 2.0),
-        CGSize::new(correct_w - 32.0, 18.0),
-    ));
-    correct.add(&correct_text);
-    view.addSubview(&correct.view);
-    rows.push(correct);
+    // The spaces the sentence ends up with.
+    let (lead, tail) = if blank(now) { edges(was) } else { edges(now) };
+    out.push(Bit::Same(lead));
+    if !blank(was) {
+        out.push(Bit::Gone(was.trim().into()));
+    }
+    if !blank(now) {
+        if !blank(was) {
+            out.push(Bit::Same(" ".into()));
+        }
+        out.push(Bit::New(now.trim().into()));
+    }
+    out.push(Bit::Same(tail));
+}
 
-    let dismiss_text = caption("Dismiss", theme::TEXT, medium);
-    let dismiss_w = dismiss_text.fittingSize().width + 28.0;
-    let dismiss = row(
-        CGRect::new(
-            CGPoint::new(pad + correct_w + 8.0, y),
-            CGSize::new(dismiss_w, button_h),
-        ),
-        CLEAR,
-        theme::HOVER,
-        objc2::sel!(dismissSentence:),
-        tag,
-        target,
-        mtm,
-    );
-    dismiss_text.setFrame(CGRect::new(
-        CGPoint::new(14.0, (button_h - 18.0) / 2.0),
-        CGSize::new(dismiss_w - 28.0, 18.0),
-    ));
-    dismiss.add(&dismiss_text);
-    view.addSubview(&dismiss.view);
-    rows.push(dismiss);
-    (view, rows)
+fn word_starts(chars: &[char]) -> Vec<usize> {
+    (0..chars.len())
+        .filter(|&i| !chars[i].is_whitespace() && (i == 0 || chars[i - 1].is_whitespace()))
+        .collect()
+}
+
+/// The last `CONTEXT` words before the change.
+fn lead(chars: &[char]) -> String {
+    let starts = word_starts(chars);
+    if starts.len() <= CONTEXT {
+        return chars.iter().collect();
+    }
+    let cut = starts[starts.len() - CONTEXT];
+    format!("…{}", chars[cut..].iter().collect::<String>())
+}
+
+/// The first `CONTEXT` words after the change.
+fn trail(chars: &[char]) -> String {
+    let starts = word_starts(chars);
+    if starts.len() <= CONTEXT {
+        return chars.iter().collect();
+    }
+    let cut = starts[CONTEXT];
+    let kept: String = chars[..cut].iter().collect();
+    format!("{}…", kept.trim_end())
+}
+
+/// The sentence's line height, and its type size.
+const LINE: f64 = 24.0;
+const TEXT: f64 = 15.0;
+/// A no-break space either side of a new word, so its fill has room to
+/// breathe without touching the letters beside it.
+const PADDING: char = '\u{202F}';
+
+/// The sentence, laid out `width` wide, over the fills of its new words.
+/// Returns the view and its height.
+fn sentence_view(
+    bits: &[Bit],
+    width: f64,
+    p: &Palette,
+    mtm: MainThreadMarker,
+) -> (Retained<NSView>, f64) {
+    let regular = theme::font(TEXT, Weight::Regular);
+    let bold = theme::font(TEXT, Weight::Semibold);
+    // Centred in its 24pt line: fixed line heights put the extra room above
+    // the letters.
+    let natural = regular.ascender() - regular.descender();
+    let raise = ((LINE - natural) / 2.0).max(0.0);
+    let style = NSMutableParagraphStyle::new();
+    style.setMinimumLineHeight(LINE);
+    style.setMaximumLineHeight(LINE);
+
+    let text = NSMutableAttributedString::new();
+    let mut fills: Vec<NSRange> = Vec::new();
+    for bit in bits {
+        let (shown, font, color, struck) = match bit {
+            Bit::Same(s) => (s.clone(), &regular, p.text, false),
+            Bit::Gone(s) => (s.clone(), &regular, p.text2, true),
+            Bit::New(s) => (format!("{PADDING}{s}{PADDING}"), &bold, p.text, false),
+        };
+        let start = text.length();
+        text.appendAttributedString(&run(&shown, font, color, struck, raise, &style));
+        if matches!(bit, Bit::New(_)) {
+            fills.push(NSRange::new(start, text.length() - start));
+        }
+    }
+
+    let storage = NSTextStorage::new();
+    storage.setAttributedString(&text);
+    let layout = NSLayoutManager::new();
+    let container =
+        NSTextContainer::initWithSize(NSTextContainer::alloc(), CGSize::new(width, f64::MAX));
+    container.setLineFragmentPadding(0.0);
+    layout.addTextContainer(&container);
+    storage.addLayoutManager(&layout);
+    layout.ensureLayoutForTextContainer(&container);
+    let used = layout.usedRectForTextContainer(&container);
+    let height = used.size.height.ceil().max(LINE);
+
+    let frame = CGRect::new(CGPoint::new(0.0, 0.0), CGSize::new(width, height));
+    let view = NSView::initWithFrame(NSView::alloc(mtm), frame);
+    let backdrop = layer_view(frame, mtm);
+    // The text view is flipped, the backdrop is not: rectangles from the
+    // layout are turned over to land under their words.
+    let rects: Rc<RefCell<Vec<CGRect>>> = Rc::default();
+    for range in fills {
+        let glyphs = unsafe {
+            layout.glyphRangeForCharacterRange_actualCharacterRange(range, std::ptr::null_mut())
+        };
+        let found = Rc::clone(&rects);
+        let collect = block2::StackBlock::new(move |rect: CGRect, _stop: NonNull<Bool>| {
+            found.borrow_mut().push(rect);
+        });
+        layout.enumerateEnclosingRectsForGlyphRange_withinSelectedGlyphRange_inTextContainer_usingBlock(
+            glyphs,
+            NSRange::new(NSNotFound as usize, 0),
+            &container,
+            &collect,
+        );
+    }
+    let fill_h = (natural + 5.0).min(LINE - 1.0).round();
+    still(|| {
+        if let Some(root) = backdrop.layer() {
+            for rect in rects.borrow().iter() {
+                let middle = rect.origin.y + rect.size.height / 2.0;
+                let layer = CALayer::new();
+                layer.setFrame(CGRect::new(
+                    CGPoint::new(rect.origin.x, height - middle - fill_h / 2.0),
+                    CGSize::new(rect.size.width, fill_h),
+                ));
+                layer.setBackgroundColor(Some(&theme::cg(p.fill)));
+                layer.setCornerRadius(5.0);
+                root.addSublayer(&layer);
+            }
+        }
+    });
+    view.addSubview(&backdrop);
+
+    let words =
+        NSTextView::initWithFrame_textContainer(NSTextView::alloc(mtm), frame, Some(&container));
+    words.setEditable(false);
+    words.setSelectable(false);
+    words.setDrawsBackground(false);
+    words.setTextContainerInset(CGSize::new(0.0, 0.0));
+    view.addSubview(&words);
+    (view, height)
+}
+
+/// One stretch of the sentence with its attributes.
+fn run(
+    text: &str,
+    font: &objc2_app_kit::NSFont,
+    color: Rgba,
+    struck: bool,
+    raise: f64,
+    style: &NSMutableParagraphStyle,
+) -> Retained<NSAttributedString> {
+    let color = theme::ns(color);
+    let one = NSNumber::new_isize(1);
+    let raise = NSNumber::new_f64(raise);
+    let mut keys: Vec<&NSAttributedStringKey> = unsafe {
+        vec![
+            NSFontAttributeName,
+            NSForegroundColorAttributeName,
+            NSParagraphStyleAttributeName,
+            NSBaselineOffsetAttributeName,
+        ]
+    };
+    let mut values: Vec<&AnyObject> = vec![font, &color, style, &raise];
+    if struck {
+        keys.push(unsafe { NSStrikethroughStyleAttributeName });
+        keys.push(unsafe { NSStrikethroughColorAttributeName });
+        values.push(&one);
+        values.push(&color);
+    }
+    let attributes = NSDictionary::from_slices(&keys, &values);
+    unsafe {
+        NSAttributedString::initWithString_attributes(
+            NSAttributedString::alloc(),
+            &NSString::from_str(text),
+            Some(&attributes),
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fix(text: &str, gone: &str, replacement: &str) -> Fix {
+        let byte = text.rfind(gone).unwrap();
+        let start = text[..byte].chars().count();
+        Fix {
+            start,
+            end: start + gone.chars().count(),
+            replacement: replacement.into(),
+            kind: Kind::Correctness,
+            message: String::new(),
+            source: Source::Ai,
+        }
+    }
+
+    fn same(s: &str) -> Bit {
+        Bit::Same(s.into())
+    }
+
+    #[test]
+    fn a_word_is_shown_in_its_sentence() {
+        let text = "Did you recieve the photos?";
+        let f = fix(text, "recieve", "receive");
+        assert_eq!(
+            snippet(text, &[&f]),
+            vec![
+                same("Did you "),
+                Bit::Gone("recieve".into()),
+                same(" "),
+                Bit::New("receive".into()),
+                same(" the photos?"),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_removal_is_struck_where_it_was() {
+        let text = "Can you send me the the link for the frame.io draft when you have a sec?";
+        let byte = text.find("the the").unwrap() + 4;
+        let start = text[..byte].chars().count();
+        let f = Fix {
+            start,
+            end: start + 4,
+            replacement: String::new(),
+            kind: Kind::Correctness,
+            message: String::new(),
+            source: Source::Ai,
+        };
+        assert_eq!(
+            snippet(text, &[&f]),
+            vec![
+                same("Can you send me the "),
+                Bit::Gone("the".into()),
+                same(" link for the frame.io draft when…"),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_long_sentence_is_cut_around_the_change() {
+        let text = "One two three four five six seven eight nine tehn eleven twelve thirteen fourteen fifteen sixteen seventeen.";
+        let f = fix(text, "tehn", "ten");
+        let bits = snippet(text, &[&f]);
+        assert_eq!(
+            bits.first(),
+            Some(&same("…four five six seven eight nine "))
+        );
+        assert_eq!(
+            bits.last(),
+            Some(&same(" eleven twelve thirteen fourteen fifteen sixteen…"))
+        );
+    }
+
+    #[test]
+    fn a_change_of_spaces_alone_is_visible() {
+        let text = "yes  was";
+        let f = fix(text, "  ", " ");
+        assert_eq!(
+            snippet(text, &[&f]),
+            vec![same("yes "), Bit::Gone(SPACE.into()), same(" was")]
+        );
+    }
+
+    #[test]
+    fn a_rewrite_is_not_shown_word_by_word() {
+        let text = "I think it would maybe be better if we could try to move it.";
+        let mut f = fix(
+            text,
+            "it would maybe be better if we could try to",
+            "we should",
+        );
+        f.kind = Kind::Clarity;
+        assert_eq!(
+            snippet(text, &[&f]),
+            vec![
+                same("I think "),
+                Bit::Gone("it would maybe be better if we could try to".into()),
+                same(" "),
+                Bit::New("we should".into()),
+                same(" move it."),
+            ]
+        );
+    }
+
+    #[test]
+    fn several_fixes_share_one_sentence() {
+        let text = "i went to paris on monday and it was great.";
+        let fixes = [
+            fix(text, "i went", "I went"),
+            fix(text, "paris", "Paris"),
+            fix(text, "monday", "Monday"),
+        ];
+        let refs: Vec<&Fix> = fixes.iter().collect();
+        let bits = snippet(text, &refs);
+        let news: Vec<&Bit> = bits.iter().filter(|b| matches!(b, Bit::New(_))).collect();
+        assert_eq!(
+            news,
+            vec![
+                &Bit::New("I".into()),
+                &Bit::New("Paris".into()),
+                &Bit::New("Monday".into())
+            ]
+        );
+        assert_eq!(bits.last(), Some(&same(" and it was great.")));
+    }
 }

@@ -42,7 +42,11 @@ Change nothing that is not a mistake. Keep every correct word, the word \
 order, the tone, slang and chat shorthand - never expanded or capitalised \
 (\"u\", \"pls\", \"ok\", \"tmrw\", \"lmk\") - emoji, line \
 breaks, and the language of each \
-sentence. Do not rephrase, shorten, or make it more formal. Leave links, \
+sentence. Shorthand is kept only where it reads as shorthand. Where the \
+sentence needs an ordinary word and the letters are that word with one \
+missing or wrong, it is a typo, even if it spells some shorthand: \
+\"is it ready nw?\" -> \"is it ready now?\", \"thx for th help\" -> \
+\"thx for the help\". Do not rephrase, shorten, or make it more formal. Leave links, \
 email addresses, @mentions, #tags, file paths, code and names written as one \
 word (\"AdCollection\") exactly as written. A domain changes only in case, \
 when it names a product (\"frame.io\" -> \"Frame.io\"). If nothing is wrong, \

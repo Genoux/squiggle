@@ -29,6 +29,8 @@ objc2-app-kit = "0.3.2"
 objc2-application-services = "0.3.2"
 objc2-core-foundation = "0.3.2"
 objc2-core-graphics = "0.3.2"
+# The card's font is bundled in the binary and loaded from its bytes.
+objc2-core-text = "0.3.2"
 objc2-foundation = "0.3.2"
 objc2-quartz-core = "0.3.2"
 # `gramly lab` only: a web text box to audit fixes against, and the

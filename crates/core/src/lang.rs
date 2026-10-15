@@ -57,8 +57,16 @@ impl Language {
     }
 }
 
+/// Words below which a sentence the detector cannot call is not counted:
+/// "Thanks!" says nothing about the paragraph.
+const SAYS_SOMETHING: usize = 4;
+
 /// The distinct languages of a text's sentences, in order of appearance,
-/// ignoring sentences too short to tell.
+/// ignoring sentences too short to tell. A sentence long enough to matter
+/// that cannot be called counts as `Unknown`: "Can you think about
+/// conservation for now?" came back at 0.33 English, was skipped, and the
+/// paragraph it opened was sent as French - the model then dropped the
+/// English sentence or wrote French over it.
 pub fn sentence_languages(text: &str) -> Vec<Language> {
     let mut found = Vec::new();
     let len = text.chars().count();
@@ -67,7 +75,9 @@ pub fn sentence_languages(text: &str) -> Vec<Language> {
         let (start, end) = crate::fix::sentence(text, at);
         let sentence: String = text.chars().skip(start).take(end - start).collect();
         let language = detect(&sentence);
-        if language != Language::Unknown && !found.contains(&language) {
+        let counts =
+            language != Language::Unknown || sentence.split_whitespace().count() >= SAYS_SOMETHING;
+        if counts && !found.contains(&language) {
             found.push(language);
         }
         at = end.max(at + 1);
@@ -91,5 +101,15 @@ mod tests {
         );
         assert_eq!(detect("their is to many emails"), Language::English);
         assert_eq!(detect("je suis aller au marché"), Language::French);
+    }
+
+    #[test]
+    fn an_uncertain_sentence_keeps_a_paragraph_from_one_label() {
+        let text = "Can you think about conservation for now? Est a tu vue la lune.";
+        assert_ne!(sentence_languages(text), vec![Language::French]);
+        assert_eq!(
+            sentence_languages("Merci ! Je regarde ça demain avec toute l'équipe."),
+            vec![Language::French]
+        );
     }
 }

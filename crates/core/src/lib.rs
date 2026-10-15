@@ -8,6 +8,7 @@ pub mod ai;
 pub mod config;
 pub mod diff;
 pub mod fix;
+pub mod improve;
 pub mod lang;
 pub mod local;
 pub mod protect;

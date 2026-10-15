@@ -12,11 +12,13 @@ mod dictionary;
 mod lab;
 mod overlay;
 mod paste;
+mod preview;
 mod theme;
 mod write;
 
 pub use app::run;
 pub use lab::{host as lab_host, run as lab};
+pub use preview::run as preview;
 
 /// What Gramly can see right now, for TROUBLESHOOTING.md. Waits a moment so
 /// there is time to click into the field in question.

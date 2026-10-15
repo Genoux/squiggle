@@ -124,6 +124,35 @@ fn joined(tokens: &[Token]) -> String {
     tokens.iter().map(|t| t.text.as_str()).collect()
 }
 
+/// A rewrite as its card shows it: the runs left as they were and, between
+/// them, what was taken out and what was put in.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Piece {
+    Same(String),
+    Changed { was: String, now: String },
+}
+
+pub fn pieces(original: &str, rewritten: &str) -> Vec<Piece> {
+    let a = tokens(original);
+    let b = tokens(rewritten);
+    let mut out = Vec::new();
+    let mut i = 0;
+    for (a_lo, a_hi, b_lo, b_hi) in hunks(&a, &b) {
+        if a_lo > i {
+            out.push(Piece::Same(joined(&a[i..a_lo])));
+        }
+        out.push(Piece::Changed {
+            was: joined(&a[a_lo..a_hi]),
+            now: joined(&b[b_lo..b_hi]),
+        });
+        i = a_hi;
+    }
+    if i < a.len() {
+        out.push(Piece::Same(joined(&a[i..])));
+    }
+    out
+}
+
 /// What kind of change, and the card's title for it - generic, as
 /// Grammarly's are ("Correct your spelling"): the change itself is the
 /// explanation, and a title naming the rule read as a lecture.
@@ -131,8 +160,13 @@ fn classify(original: &str, replacement: &str) -> (Kind, String) {
     let letters = |s: &str| -> String { s.chars().filter(|c| c.is_alphanumeric()).collect() };
     let same_letters = letters(original).to_lowercase() == letters(replacement).to_lowercase();
     let case = letters(original) != letters(replacement);
+    let solid = |s: &str| -> String { s.chars().filter(|c| !c.is_whitespace()).collect() };
     let (title, kind) = if same_letters && case {
         ("Correct the capitalization", Kind::Correctness)
+    } else if solid(original) == solid(replacement) {
+        // Only spaces differ: "now?Due" -> "now? Due" is spacing, not a
+        // punctuation mark.
+        ("Correct your spacing", Kind::Correctness)
     } else if same_letters {
         ("Correct your punctuation", Kind::Correctness)
     } else if !original.is_empty()
@@ -240,6 +274,16 @@ fn line_fixes(original: &str, corrected: &str) -> Vec<Fix> {
             a_hi -= 1;
             b_hi -= 1;
         }
+        // The spaces ending a line are the writer mid-sentence: a fix never
+        // takes them. "now? " came back as "? " -> "", which slipped past
+        // the end-mark rule in `final_form`, and a web field reports a
+        // trailing space so differently that accepting it did nothing.
+        while a_hi == a.len() && a_hi > a_lo && a[a_hi - 1].space() {
+            a_hi -= 1;
+            while b_hi > b_lo && b[b_hi - 1].space() {
+                b_hi -= 1;
+            }
+        }
         if a_lo >= a_hi {
             continue;
         }
@@ -261,7 +305,7 @@ fn line_fixes(original: &str, corrected: &str) -> Vec<Fix> {
     out
 }
 
-/// The model's fixes in their final form, by two rules it keeps only most
+/// The model's fixes in their final form, by rules it keeps only most
 /// of the time:
 ///
 /// - A fix to a sentence's first word gives it its capital. Asked about
@@ -273,6 +317,10 @@ fn line_fixes(original: &str, corrected: &str) -> Vec<Fix> {
 /// - An exclamation mark is never a mistake: a fix that only turns "!"
 ///   into another end mark is dropped. The model offered "!" -> "." on a
 ///   finished line.
+/// - An end mark the writer typed is never taken away. After "Can you
+///   think about conservation for now?" was accepted from an improvement,
+///   the model offered to remove its "?" one run in three. "!!" -> "!" and
+///   "etc.." -> "etc." still stand: a mark is left.
 /// - An ellipsis is never added. On a sentence still being typed the model
 ///   turned "congelationÉ" into "congelation..." two runs in three; the
 ///   fix keeps "congelation", and one left with nothing to change goes.
@@ -294,7 +342,15 @@ pub fn final_form(text: &str, fixes: Vec<Fix>) -> Vec<Fix> {
             let original = fix.original(text);
             let swapped = original.trim_end().ends_with('!')
                 && original.trim_end_matches('!') == fix.replacement.trim_end_matches(['.', '?']);
-            !swapped
+            let marks = ['.', '?', '!'];
+            // A mark next to the one removed stays, so the sentence keeps
+            // an end: "Done.." -> "Done." is a correction.
+            let stays = |at: Option<&char>| at.is_some_and(|c| marks.contains(c));
+            let unmarked = original.ends_with(marks)
+                && original.trim_end_matches(marks) == fix.replacement
+                && !stays(fix.start.checked_sub(1).and_then(|i| chars.get(i)))
+                && !stays(chars.get(fix.end));
+            !swapped && !unmarked
         })
         .map(|mut fix| {
             if starts_sentence(&chars, fix.start) {
@@ -356,6 +412,52 @@ mod tests {
         assert!(final_form(text, fixes(text, "This is the test for me.\n")).is_empty());
         let text = "wow!!\n";
         assert!(final_form(text, fixes(text, "wow.\n")).is_empty());
+    }
+
+    #[test]
+    fn pieces_show_a_moved_phrase() {
+        let found = pieces("for now about conservation.", "about conservation for now?");
+        let side = |new: bool| -> String {
+            found
+                .iter()
+                .map(|p| match p {
+                    Piece::Same(s) => s.clone(),
+                    Piece::Changed { was, now } => if new { now } else { was }.clone(),
+                })
+                .collect()
+        };
+        assert_eq!(side(false), "for now about conservation.");
+        assert_eq!(side(true), "about conservation for now?");
+        assert!(
+            found
+                .iter()
+                .any(|p| matches!(p, Piece::Same(s) if s.trim().len() > 2))
+        );
+    }
+
+    #[test]
+    fn an_end_mark_is_never_taken_away() {
+        let text = "Can you think about conservation for now?";
+        let found = final_form(
+            text,
+            fixes(text, "Can you think about conservation for now"),
+        );
+        assert!(found.is_empty(), "{found:?}");
+        let text = "Thanks.\n";
+        assert!(final_form(text, fixes(text, "Thanks\n")).is_empty());
+        let text = "Done..\n";
+        assert_eq!(final_form(text, fixes(text, "Done.\n")).len(), 1);
+    }
+
+    #[test]
+    fn the_space_ending_a_line_is_never_taken() {
+        let text = "Can you think about conservation for now? ";
+        let found = fixes(text, "Can you think about conservation for now");
+        assert!(
+            found.iter().all(|f| !f.original(text).ends_with(' ')),
+            "{found:?}"
+        );
+        assert!(final_form(text, found).is_empty());
     }
 
     #[test]

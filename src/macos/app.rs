@@ -11,9 +11,10 @@ use crate::macos::ax::{self, Field};
 use crate::macos::dictionary::Dictionary;
 use crate::macos::overlay::{self, Mark, Overlay};
 use crate::macos::paste;
+use crate::macos::theme;
 use crate::macos::write;
 use gramly_core::worker::{Outcome, Worker};
-use gramly_core::{Config, Fix, config, merge, rebase, sentence};
+use gramly_core::{Config, Fix, Kind, config, merge, rebase, sentence};
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, NSObject, NSObjectProtocol};
 use objc2::{
@@ -21,8 +22,8 @@ use objc2::{
 };
 use objc2_app_kit::{
     NSAlert, NSAlertFirstButtonReturn, NSApplication, NSApplicationActivationPolicy, NSEvent,
-    NSImage, NSMenu, NSMenuItem, NSSecureTextField, NSStatusBar, NSStatusItem,
-    NSVariableStatusItemLength, NSWorkspace,
+    NSMenu, NSMenuItem, NSSecureTextField, NSStatusBar, NSStatusItem, NSVariableStatusItemLength,
+    NSWorkspace,
 };
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 use objc2_foundation::{NSString, NSTimer, NSURL};
@@ -51,7 +52,7 @@ const GRACE: u32 = 8;
 /// Past this without an answer from the model, Harper's underlines are
 /// shown after all.
 const MODEL_LATE: Duration = Duration::from_secs(4);
-/// How long an accepted word glows green.
+/// How long an accepted word glows.
 const FLASH: Duration = Duration::from_millis(380);
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// "Pause for an hour". Held in memory: a restart is a fresh start.
@@ -77,6 +78,9 @@ struct State {
     submitted: bool,
     local: Vec<Fix>,
     ai: Vec<Fix>,
+    /// Clearer wording from `improve`, drawn only beside a settled
+    /// correction answer; see `refilter`.
+    improve: Vec<Fix>,
     fixes: Vec<Fix>,
     /// What was dismissed, as [`dismissal`] keys it. Kept across fields and
     /// apps until Gramly quits: cleared whenever focus moved, a suggestion
@@ -503,6 +507,7 @@ impl Controller {
             // never make the rest flicker.
             state.local = rebase(&state.text, &text, &state.local);
             state.ai = rebase(&state.text, &text, &state.ai);
+            state.improve = rebase(&state.text, &text, &state.improve);
             state.fixes = rebase(&state.text, &text, &state.fixes);
             trace(&format!(
                 "text changed: {} -> {} chars",
@@ -549,6 +554,13 @@ impl Controller {
                     state.ai_error = None;
                     changed = true;
                 }
+                Outcome::Improve { generation, fixes } if generation == state.generation => {
+                    state.improve = fixes;
+                    changed = true;
+                }
+                Outcome::ImproveFailed { reason, .. } => {
+                    note!("improvement check failed: {reason}");
+                }
                 Outcome::AiFailed { reason, .. } if state.ai_error.as_deref() != Some(&reason) => {
                     note!("model check failed: {reason}");
                     state.ai_error = Some(reason);
@@ -590,7 +602,7 @@ impl Controller {
         let field_rect = overlay::to_cocoa(frame, mtm);
         state.words.clear();
         for (index, fix) in state.fixes.iter().enumerate() {
-            let (location, length) = fix.utf16(&state.text);
+            let (location, length) = anchor(&state.text, fix).utf16(&state.text);
             // An insertion has no width of its own; underline the character
             // it follows so there is something to hover.
             let (location, length) = if length == 0 {
@@ -714,18 +726,52 @@ impl Controller {
 
 /// Every fix in the same sentence as `index`, in order. One means the word
 /// card; more means the sentence card.
+/// An improvement is always alone: it is never part of "Correct the
+/// sentence".
 fn group(state: &State, index: usize) -> Vec<(usize, Fix)> {
     let Some(fix) = state.fixes.get(index) else {
         return Vec::new();
     };
+    if fix.kind == Kind::Clarity {
+        return vec![(index, fix.clone())];
+    }
     let (start, end) = sentence(&state.text, fix.start);
     state
         .fixes
         .iter()
         .enumerate()
-        .filter(|(_, f)| f.start >= start && f.end <= end.max(start))
+        .filter(|(_, f)| f.kind != Kind::Clarity)
+        // The hovered fix is always in its own group. One ending past its
+        // sentence (a fix over "?" and what follows it) was left out, and
+        // its card, given a group without it, opened nothing.
+        .filter(|(i, f)| *i == index || f.start >= start && f.end <= end.max(start))
         .map(|(i, f)| (i, f.clone()))
         .collect()
+}
+
+/// What an underline is drawn under. A correction is drawn under all it
+/// changes; an improvement spans most of a sentence and may wrap, so it is
+/// drawn under the first words it changes ("for now" in "Can you think for
+/// now about conservation."), as Grammarly does.
+fn anchor(text: &str, fix: &Fix) -> Fix {
+    use gramly_core::diff::{Piece, pieces};
+    if fix.kind != Kind::Clarity {
+        return fix.clone();
+    }
+    let mut at = fix.start;
+    for piece in pieces(&fix.original(text), &fix.replacement) {
+        match piece {
+            Piece::Same(same) => at += same.chars().count(),
+            Piece::Changed { was, .. } => {
+                let lead = was.chars().take_while(|c| c.is_whitespace()).count();
+                let mut part = fix.clone();
+                part.start = at + lead;
+                part.end = at + was.trim_end().chars().count().max(lead);
+                return part;
+            }
+        }
+    }
+    fix.clone()
 }
 
 fn grow(rect: CGRect, by: f64) -> CGRect {
@@ -788,6 +834,7 @@ fn reset(state: &mut State) {
     state.placed.clear();
     state.local.clear();
     state.ai.clear();
+    state.improve.clear();
     state.fixes.clear();
     state.words.clear();
     state.hovering = None;
@@ -850,10 +897,29 @@ fn refilter(state: &mut State) {
     } else {
         merge(state.local.clone(), state.ai.clone())
     };
-    state.fixes = base
+    let mut fixes: Vec<Fix> = base
         .into_iter()
         .filter(|fix| !dismissed.contains(&dismissal(text, fix)))
         .collect();
+    // Improvements are proposals on correct text. One is shown only once
+    // the model has answered for this text, and only in a sentence with no
+    // correction left: rewriting words that are about to be corrected would
+    // have the two cards fight over them. Accepting the corrections changes
+    // the text, and the next answer proposes the rewrite of what is left.
+    if state.ai_current {
+        let corrected: Vec<(usize, usize)> =
+            fixes.iter().map(|f| sentence(text, f.start)).collect();
+        fixes.extend(
+            state
+                .improve
+                .iter()
+                .filter(|fix| !corrected.contains(&sentence(text, fix.start)))
+                .filter(|fix| !dismissed.contains(&dismissal(text, fix)))
+                .cloned(),
+        );
+        fixes.sort_by_key(|f| f.start);
+    }
+    state.fixes = fixes;
     offered_again(state);
     if std::env::var_os("GRAMLY_TRACE").is_some() {
         let shown: Vec<String> = state
@@ -977,7 +1043,7 @@ fn linger(state: &mut State, mouse: CGPoint) {
     }
 }
 
-/// Starts the green glow on the words about to be accepted.
+/// Starts the glow on the words about to be accepted.
 fn flash(state: &mut State, indices: &[usize]) {
     let rects: Vec<CGRect> = state
         .words
@@ -1279,17 +1345,11 @@ fn build_menu(state: &mut State, controller: &Controller, mtm: MainThreadMarker)
     let bar = NSStatusBar::systemStatusBar();
     let item = bar.statusItemWithLength(NSVariableStatusItemLength);
     if let Some(button) = item.button(mtm) {
-        let image = NSImage::imageWithSystemSymbolName_accessibilityDescription(
-            &NSString::from_str("text.badge.checkmark"),
-            Some(&NSString::from_str("Gramly")),
-        );
-        match image {
-            Some(image) => {
-                image.setTemplate(true);
-                button.setImage(Some(&image));
-            }
-            None => button.setTitle(&NSString::from_str("G")),
-        }
+        // Gramly's own mark rather than a system symbol: SF Symbols do not
+        // exist on Linux, and the tray icon should be the same there.
+        let image = theme::mark(18.0, None);
+        image.setAccessibilityDescription(Some(&NSString::from_str("Gramly")));
+        button.setImage(Some(&image));
     }
 
     let menu = NSMenu::new(mtm);
@@ -1423,6 +1483,7 @@ pub fn run() -> anyhow::Result<()> {
         submitted: false,
         local: Vec::new(),
         ai: Vec::new(),
+        improve: Vec::new(),
         fixes: Vec::new(),
         dismissed: HashSet::new(),
         words: Vec::new(),

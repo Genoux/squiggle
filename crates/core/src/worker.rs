@@ -9,10 +9,13 @@
 //! The model is asked per paragraph and answers are cached by the paragraph's
 //! exact text. Typing in one paragraph of a long email then costs one request
 //! for that paragraph, and moving focus away and back costs nothing.
+//!
+//! Improvements (`improve`) are a third thread on the same pattern, so a
+//! slower or failing improvement never holds up a correction.
 
 use crate::config::{self, Config};
 use crate::fix::Fix;
-use crate::{Local, ai, protect};
+use crate::{Local, ai, improve, protect};
 use std::collections::HashMap;
 use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
 
@@ -40,6 +43,23 @@ pub enum Outcome {
         generation: u64,
         reason: String,
     },
+    /// Clearer wording, `Kind::Clarity` fixes, for the same generation.
+    Improve {
+        generation: u64,
+        fixes: Vec<Fix>,
+    },
+    /// The improvement pass failed; nothing else is affected.
+    ImproveFailed {
+        generation: u64,
+        reason: String,
+    },
+}
+
+/// Which model pass a loop runs.
+#[derive(Clone, Copy)]
+enum Pass {
+    Correct,
+    Improve,
 }
 
 pub struct Worker {
@@ -57,17 +77,23 @@ impl Worker {
     pub fn spawn() -> Self {
         let (requests, local_in) = channel::<Request>();
         let (ai_out, ai_in) = channel::<Request>();
+        let (improve_out, improve_in) = channel::<Request>();
         let (outcome_tx, outcomes) = channel::<Outcome>();
 
         let local_tx = outcome_tx.clone();
+        let improve_tx = outcome_tx.clone();
         std::thread::Builder::new()
             .name("gramly-local".into())
-            .spawn(move || local_loop(local_in, ai_out, local_tx))
+            .spawn(move || local_loop(local_in, [ai_out, improve_out], local_tx))
             .expect("spawning the local checker");
         std::thread::Builder::new()
             .name("gramly-ai".into())
-            .spawn(move || ai_loop(ai_in, outcome_tx))
+            .spawn(move || model_loop(Pass::Correct, ai_in, outcome_tx))
             .expect("spawning the model checker");
+        std::thread::Builder::new()
+            .name("gramly-improve".into())
+            .spawn(move || model_loop(Pass::Improve, improve_in, improve_tx))
+            .expect("spawning the improvement checker");
 
         Self { requests, outcomes }
     }
@@ -89,7 +115,7 @@ fn newest(first: Request, rx: &Receiver<Request>) -> Request {
     latest
 }
 
-fn local_loop(rx: Receiver<Request>, ai: Sender<Request>, out: Sender<Outcome>) {
+fn local_loop(rx: Receiver<Request>, model: [Sender<Request>; 2], out: Sender<Outcome>) {
     let mut dialect = None;
     let mut local: Option<Local> = None;
     while let Ok(first) = rx.recv() {
@@ -118,12 +144,14 @@ fn local_loop(rx: Receiver<Request>, ai: Sender<Request>, out: Sender<Outcome>) 
             fixes,
         });
         if config.ai && config.openrouter_key.is_some() {
-            let _ = ai.send(request);
+            for pass in &model {
+                let _ = pass.send(request.clone());
+            }
         }
     }
 }
 
-fn ai_loop(rx: Receiver<Request>, out: Sender<Outcome>) {
+fn model_loop(pass: Pass, rx: Receiver<Request>, out: Sender<Outcome>) {
     let mut cache: HashMap<String, Vec<Fix>> = HashMap::new();
     let mut cached_dialect = String::new();
     let mut pending: Option<Request> = None;
@@ -175,7 +203,13 @@ fn ai_loop(rx: Receiver<Request>, out: Sender<Outcome>) {
                     .iter()
                     .map(|p| {
                         let key = &key;
-                        scope.spawn(move || (p.to_string(), ai::check(key, p, dialect)))
+                        scope.spawn(move || {
+                            let answer = match pass {
+                                Pass::Correct => ai::check(key, p, dialect),
+                                Pass::Improve => improve::check(key, p),
+                            };
+                            (p.to_string(), answer)
+                        })
                     })
                     .collect();
                 handles
@@ -209,9 +243,10 @@ fn ai_loop(rx: Receiver<Request>, out: Sender<Outcome>) {
             continue;
         }
         if let Some(reason) = failure {
-            let _ = out.send(Outcome::AiFailed {
-                generation: request.generation,
-                reason,
+            let generation = request.generation;
+            let _ = out.send(match pass {
+                Pass::Correct => Outcome::AiFailed { generation, reason },
+                Pass::Improve => Outcome::ImproveFailed { generation, reason },
             });
         }
 
@@ -226,9 +261,11 @@ fn ai_loop(rx: Receiver<Request>, out: Sender<Outcome>) {
             }
         }
         let fixes = protect::keep(&request.text, fixes);
-        let _ = out.send(Outcome::Ai {
-            generation: request.generation,
-            fixes: protect::keep_known(&request.text, fixes, &config::dictionary()),
+        let fixes = protect::keep_known(&request.text, fixes, &config::dictionary());
+        let generation = request.generation;
+        let _ = out.send(match pass {
+            Pass::Correct => Outcome::Ai { generation, fixes },
+            Pass::Improve => Outcome::Improve { generation, fixes },
         });
     }
 }
