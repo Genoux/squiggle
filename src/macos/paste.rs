@@ -22,6 +22,8 @@ const KEY_Z: u16 = 6;
 const KEY_RIGHT: u16 = 124;
 /// `kVK_LeftArrow`.
 const KEY_LEFT: u16 = 123;
+/// `kVK_Delete`, the key labelled delete: backspace.
+const KEY_DELETE: u16 = 51;
 
 /// How long the target app gets to read the pasteboard before it is
 /// restored. Measured against Chrome and Slack, which read on the next
@@ -42,6 +44,12 @@ pub fn paste(text: &str) {
         std::thread::sleep(RESTORE_AFTER);
         restore(&NSPasteboard::generalPasteboard(), saved);
     });
+}
+
+/// Delete in the focused app: removes the selection. Every field
+/// understands it, where an empty paste is ignored by some.
+pub fn delete() {
+    press(KEY_DELETE, CGEventFlags::empty());
 }
 
 /// ⌘Z in the focused app: takes back a fix that went wrong.

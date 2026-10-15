@@ -51,6 +51,8 @@ const GRACE: u32 = 8;
 /// Past this without an answer from the model, Harper's underlines are
 /// shown after all.
 const MODEL_LATE: Duration = Duration::from_secs(4);
+/// How long an accepted fix stays accepted: not offered, not written again.
+const ACCEPTED_FOR: Duration = Duration::from_secs(60);
 /// How long an accepted word glows.
 pub(crate) const FLASH: Duration = Duration::from_millis(380);
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -103,10 +105,9 @@ struct State {
     /// The field's text before the last accepted fix, what it should read
     /// after, and when it was accepted; see `audit`.
     expecting: Option<(String, String, Instant)>,
-    /// Fixes accepted lately, as (words, replacement, when). One offered
-    /// again is logged: "the underline came back with the same correction"
-    /// was reported and never reproduced.
-    accepted: Vec<(String, String, Instant)>,
+    /// Fixes accepted in the last `ACCEPTED_FOR`, by the same key as a
+    /// dismissal, and when. None of them is offered or written again.
+    accepted: Vec<(Dismissal, Instant)>,
     /// Unanswered accessibility questions in a row; see `GRACE`.
     misses: u32,
     /// AI suggestions are switched on and have a key.
@@ -921,10 +922,16 @@ fn refilter(state: &mut State) {
     } else {
         merge(state.local.clone(), state.ai.clone())
     };
-    let mut fixes: Vec<Fix> = base
-        .into_iter()
-        .filter(|fix| !dismissed.contains(&dismissal(text, fix)))
-        .collect();
+    // An accepted fix is not offered again. The app can take a moment to
+    // report the text the fix wrote - Slack did - and until it does, the old
+    // text still holds the fix: offered again and accepted again, "new"
+    // got two commas.
+    let accepted = &state.accepted;
+    let fresh = |fix: &Fix| {
+        let key = dismissal(text, fix);
+        !dismissed.contains(&key) && !accepted.iter().any(|(was, _)| *was == key)
+    };
+    let mut fixes: Vec<Fix> = base.into_iter().filter(|fix| fresh(fix)).collect();
     // Improvements are proposals on correct text. One is shown only once
     // the model has answered for this text, and only in a sentence with no
     // correction left: rewriting words that are about to be corrected would
@@ -938,13 +945,12 @@ fn refilter(state: &mut State) {
                 .improve
                 .iter()
                 .filter(|fix| !corrected.contains(&sentence(text, fix.start)))
-                .filter(|fix| !dismissed.contains(&dismissal(text, fix)))
+                .filter(|fix| fresh(fix))
                 .cloned(),
         );
         fixes.sort_by_key(|f| f.start);
     }
     state.fixes = fixes;
-    offered_again(state);
     if std::env::var_os("GRAMLY_TRACE").is_some() {
         let shown: Vec<String> = state
             .fixes
@@ -1085,6 +1091,9 @@ fn flash(state: &mut State, indices: &[usize]) {
 fn accept_fix(state: &mut State, fix: &Fix) {
     state.overlay.hide_card();
     let fix = fix.clone();
+    if was_accepted(state, &fix) {
+        return refused("already accepted; the app has not shown the change yet");
+    }
     let Some(field) = &state.field else {
         return;
     };
@@ -1133,34 +1142,24 @@ fn audit(state: &mut State) {
     }
 }
 
-/// Notes accepted fixes, for [`offered_again`].
+/// Notes accepted fixes and takes them off the page at once, without
+/// waiting for the app to report the new text.
 fn remember(state: &mut State, fixes: &[Fix]) {
     let now = Instant::now();
-    state
-        .accepted
-        .retain(|(_, _, at)| at.elapsed() < Duration::from_secs(60));
+    state.accepted.retain(|(_, at)| at.elapsed() < ACCEPTED_FOR);
     for fix in fixes {
-        state
-            .accepted
-            .push((fix.original(&state.text), fix.replacement.clone(), now));
+        state.accepted.push((dismissal(&state.text, fix), now));
     }
+    refilter(state);
 }
 
-/// Logs a fix accepted in the last minute that is being offered again.
-fn offered_again(state: &State) {
-    for fix in &state.fixes {
-        let words = fix.original(&state.text);
-        if let Some((_, _, at)) = state.accepted.iter().find(|(was, now, at)| {
-            *was == words && *now == fix.replacement && at.elapsed() < Duration::from_secs(60)
-        }) {
-            note!(
-                "an accepted fix is offered again {:.1}s later: {words:?} -> {:?} (model answered: {})",
-                at.elapsed().as_secs_f64(),
-                fix.replacement,
-                state.ai_current
-            );
-        }
-    }
+/// Whether `fix` was accepted in the last `ACCEPTED_FOR`.
+fn was_accepted(state: &State, fix: &Fix) -> bool {
+    let key = dismissal(&state.text, fix);
+    state
+        .accepted
+        .iter()
+        .any(|(was, at)| *was == key && at.elapsed() < ACCEPTED_FOR)
 }
 
 /// A fix not applied, and why. Logged: losing the user's text is the one
@@ -1192,6 +1191,9 @@ fn accept_fixes(state: &mut State, indices: &[usize]) {
         return;
     }
     state.overlay.hide_card();
+    if fixes.iter().any(|fix| was_accepted(state, fix)) {
+        return refused("already accepted; the app has not shown the change yet");
+    }
     let text = state.text.clone();
     let corrected = match write::many(field, &text, &fixes) {
         Ok(corrected) => corrected,

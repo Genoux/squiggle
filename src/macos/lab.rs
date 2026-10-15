@@ -117,6 +117,13 @@ const CASES: &[Case] = &[
         text: "Can you think for now about conservation. What can I keep?",
         fixes: &[("for now about conservation.", "about conservation for now?")],
     },
+    // Removals: a repeated word, and the second of two commas. In Slack the
+    // comma was pasted over as nothing and stayed; a removal is a Delete.
+    Case {
+        name: "removal",
+        text: "Send me the the link,, thanks",
+        fixes: &[("the ", ""), (",", "")],
+    },
     Case {
         name: "chip",
         text: "Pick {chip} an oldad for teh campaign",
