@@ -277,6 +277,14 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
   field is dropped only after `GRACE` (8) misses in a row, and a withdrawn
   card stays as `ORPHAN` - accepting still works from `card_fix` - until the
   pointer leaves. Abnormal closes are logged; `GRAMLY_TRACE=1` logs all.
+- Only a non-answer waits out `GRACE`. Focus answered as being elsewhere
+  (`ax::Focus::Elsewhere`), or another app coming forward, drops the field
+  at once: read as misses, a switch to another window left the underlines
+  over it for 400ms. The app in front is checked before any accessibility
+  question, and a tick also runs the moment one is activated
+  (`NSWorkspaceDidActivateApplicationNotification`). The field already
+  being read is recognised by its element before anything is asked of it,
+  so a tick in a field costs one round trip, not five.
 - Every app is sent `AXManualAccessibility = true` once when it first comes
   forward (`ax::wake`). Electron and Chromium build no accessibility tree
   without it, which is how Grammarly works in a Claude or Slack text box

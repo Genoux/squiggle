@@ -22,7 +22,7 @@ use objc2::{
 use objc2_app_kit::{
     NSAlert, NSAlertFirstButtonReturn, NSApplication, NSApplicationActivationPolicy, NSEvent,
     NSImage, NSMenu, NSMenuItem, NSSecureTextField, NSStatusBar, NSStatusItem,
-    NSVariableStatusItemLength, NSWorkspace,
+    NSVariableStatusItemLength, NSWorkspace, NSWorkspaceDidActivateApplicationNotification,
 };
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 use objc2_foundation::{NSString, NSTimer, NSURL};
@@ -135,6 +135,8 @@ struct State {
     paused_until: Option<Instant>,
     /// The app in front (bundle id, name); see `ax::frontmost_app`.
     front: Option<(String, String)>,
+    /// The process in front last tick, Gramly included.
+    front_pid: Option<i32>,
     /// Built the first time it is opened, then kept.
     dictionary: Option<Dictionary>,
     /// The last snapshot written for `GRAMLY_STATE`.
@@ -473,23 +475,46 @@ impl Controller {
             ax::wake(pid);
         }
 
+        // Another app came forward: typing no longer goes to the field.
+        // Hidden on this tick, before any question: read as an unanswered
+        // focus question, it took GRACE ticks, and the underlines sat over
+        // the next window for 400ms.
+        let front_pid = ax::frontmost_pid();
+        if front_pid != state.front_pid {
+            state.front_pid = front_pid;
+            if state
+                .field
+                .as_ref()
+                .is_some_and(|field| Some(field.pid()) != front_pid)
+            {
+                trace("another app came forward; field dropped");
+                reset(state);
+            }
+        }
+
         // Focus. A question to another app can go unanswered for a tick -
         // Chromium misses its 150ms deadline while it is busy - and that is
-        // not focus leaving. Only a run of misses is.
-        let field = ax::focused_field();
-        match (&field, &state.field) {
-            (Some(now), Some(before)) if now == before => state.misses = 0,
-            (Some(_), _) => {
+        // not focus leaving. Only a run of misses is. An answer that focus
+        // is on something else is, at once.
+        match ax::focus(state.field.as_ref()) {
+            ax::Focus::Same => state.misses = 0,
+            ax::Focus::Field(field) => {
                 reset(state);
-                state.field = field;
+                state.field = Some(*field);
                 state.misses = 0;
             }
-            (None, Some(_)) => {
-                if self.missed(state, "focus") {
+            ax::Focus::Elsewhere => {
+                if state.field.is_some() {
+                    trace("focus moved off the field");
+                    reset(state);
+                }
+                return;
+            }
+            ax::Focus::Unknown => {
+                if state.field.is_none() || self.missed(state, "focus") {
                     return;
                 }
             }
-            (None, None) => return,
         }
         let Some(field) = &state.field else {
             return;
@@ -1505,6 +1530,7 @@ pub fn run() -> anyhow::Result<()> {
         expecting: None,
         accepted: Vec::new(),
         misses: 0,
+        front_pid: None,
         ai_on: false,
         submitted_at: Instant::now(),
         placed: std::collections::HashMap::new(),
@@ -1537,6 +1563,18 @@ pub fn run() -> anyhow::Result<()> {
             true,
         )
     };
+    // A tick the moment another app comes forward, not up to a tick later:
+    // the underlines leave with the window they were drawn for.
+    unsafe {
+        NSWorkspace::sharedWorkspace()
+            .notificationCenter()
+            .addObserver_selector_name_object(
+                controller.target(),
+                sel!(tick:),
+                Some(NSWorkspaceDidActivateApplicationNotification),
+                None,
+            );
+    }
     note!(
         "{VERSION} ready{}",
         if trusted {

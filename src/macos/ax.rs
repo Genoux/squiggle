@@ -54,6 +54,8 @@ pub fn trusted(prompt: bool) -> bool {
 
 pub struct Field {
     element: CFRetained<AXUIElement>,
+    /// The app it belongs to.
+    pid: i32,
     /// Whether the field answers `AXBoundsForRange` itself; `None` until
     /// asked. Chromium's text areas answer with an empty rectangle at x = 0
     /// for every range, so they are measured through their text children.
@@ -143,10 +145,15 @@ fn string_attribute(element: &AXUIElement, name: &'static str) -> Option<String>
 }
 
 fn settable(element: &AXUIElement, name: &'static str) -> bool {
+    settable_answer(element, name) == Some(true)
+}
+
+/// Whether `name` can be set, or None if the app did not say.
+fn settable_answer(element: &AXUIElement, name: &'static str) -> Option<bool> {
     let name = CFString::from_static_str(name);
     let mut result: u8 = 0;
     let error = unsafe { element.is_attribute_settable(&name, NonNull::from(&mut result).cast()) };
-    error == AXError::Success && result != 0
+    (error == AXError::Success).then_some(result != 0)
 }
 
 fn point_of(value: &CFType) -> Option<CGPoint> {
@@ -239,44 +246,86 @@ pub fn wake(pid: i32) {
     unsafe { app.set_attribute_value(&name, yes) };
 }
 
-/// The text field that has keyboard focus, if it is one Gramly should read.
-pub fn focused_field() -> Option<Field> {
-    explain_focus().ok()
+/// What has keyboard focus, as far as underlining goes.
+pub enum Focus {
+    /// The field already being read: answered without asking it anything.
+    Same,
+    /// Another editable text field.
+    Field(Box<Field>),
+    /// An answer that it is not one: another control, a terminal, a password
+    /// field, Gramly's own window. The field is given up at once.
+    Elsewhere,
+    /// No answer: the app is busy or has just come forward. Not proof that
+    /// focus left; see `app::GRACE`.
+    Unknown,
 }
 
-/// [`focused_field`], with the reason when there is none - for `gramly doctor`.
+/// What has keyboard focus, `current` being the field read last tick. The
+/// same element is recognised before any question about it, so a field in
+/// use costs one round trip a tick, not five.
+pub fn focus(current: Option<&Field>) -> Focus {
+    match examine_focus(current) {
+        Ok(None) => Focus::Same,
+        Ok(Some(field)) => Focus::Field(Box::new(field)),
+        Err((true, _)) => Focus::Elsewhere,
+        Err((false, _)) => Focus::Unknown,
+    }
+}
+
+/// The focused text field, with the reason when there is none - for `gramly
+/// doctor`.
 pub fn explain_focus() -> Result<Field, String> {
+    match examine_focus(None) {
+        Ok(Some(field)) => Ok(field),
+        Ok(None) => unreachable!("nothing to be the same as"),
+        Err((_, why)) => Err(why),
+    }
+}
+
+/// The focused field: None when it is `current`. The error says whether the
+/// app answered (it is not a field) or did not (it may still be one).
+fn examine_focus(current: Option<&Field>) -> Result<Option<Field>, (bool, String)> {
     let system = unsafe { AXUIElement::new_system_wide() };
     unsafe { system.set_messaging_timeout(MESSAGING_TIMEOUT) };
-    let element = focused_element(&system)?;
+    let element = focused_element(&system).map_err(|why| (false, why))?;
+    if current.is_some_and(|field| *field.element == *element) {
+        return Ok(None);
+    }
 
     let mut pid: i32 = 0;
     if unsafe { element.pid(NonNull::from(&mut pid)) } != AXError::Success {
-        return Err("the focused element has no process".into());
+        return Err((false, "the focused element has no process".into()));
     }
     if pid == std::process::id() as i32 {
-        return Err("focus is in Gramly itself".into());
+        return Err((true, "focus is in Gramly itself".into()));
     }
     let app = bundle_id(pid);
     if SKIPPED_APPS.contains(&app.as_str()) {
-        return Err(format!("{app} is a terminal, skipped on purpose"));
+        return Err((true, format!("{app} is a terminal, skipped on purpose")));
     }
 
-    let role = string_attribute(&element, "AXRole").unwrap_or_default();
+    // Every element has a role; none back means the app did not answer.
+    let role = string_attribute(&element, "AXRole")
+        .ok_or_else(|| (false, format!("{app}: the focused element did not answer")))?;
     let subrole = string_attribute(&element, "AXSubrole").unwrap_or_default();
     if role == "AXSecureTextField" || subrole == "AXSecureTextField" {
-        return Err("a password field, never read".into());
+        return Err((true, "a password field, never read".into()));
     }
     // Browsers and Electron report a contenteditable as an AXGroup or
     // AXWebArea that is still editable; the settable value is what says so.
-    let editable = TEXT_ROLES.contains(&role.as_str())
-        || settable(&element, "AXValue")
-        || settable(&element, "AXSelectedText");
-    if !editable {
-        return Err(format!("{app}: the focused {role} is not editable text"));
+    if !TEXT_ROLES.contains(&role.as_str()) {
+        let value = settable_answer(&element, "AXValue");
+        let selected = settable_answer(&element, "AXSelectedText");
+        if value != Some(true) && selected != Some(true) {
+            let answered = value.is_some() && selected.is_some();
+            return Err((
+                answered,
+                format!("{app}: the focused {role} is not editable text"),
+            ));
+        }
     }
     unsafe { element.set_messaging_timeout(MESSAGING_TIMEOUT) };
-    Ok(Field::new(element))
+    Ok(Some(Field::new(element)))
 }
 
 /// The focused element, asked of the system first and of the frontmost app
@@ -306,9 +355,17 @@ fn focused_element(system: &AXUIElement) -> Result<CFRetained<AXUIElement>, Stri
 }
 
 impl Field {
+    pub fn pid(&self) -> i32 {
+        self.pid
+    }
+
     fn new(element: CFRetained<AXUIElement>) -> Self {
+        // Kept in the element itself: no question to the app.
+        let mut pid: i32 = 0;
+        unsafe { element.pid(NonNull::from(&mut pid)) };
         Self {
             element,
+            pid,
             own_bounds: std::cell::Cell::new(None),
             segments: std::cell::RefCell::new(None),
             labels: std::cell::OnceCell::new(),
