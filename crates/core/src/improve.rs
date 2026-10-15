@@ -105,7 +105,7 @@ pub fn check(key: &str, text: &str) -> Result<Vec<Fix>> {
 
 /// [`check`] on any route, with what the call cost when OpenRouter says.
 pub fn check_on(route: &router::Route, key: &str, text: &str) -> Result<(Vec<Fix>, Option<f64>)> {
-    if text.trim().is_empty() {
+    if crate::protect::blank(text) {
         return Ok((Vec::new(), None));
     }
     let answer = router::structured_on(

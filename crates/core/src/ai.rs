@@ -135,7 +135,7 @@ pub fn check_on(
     text: &str,
     dialect: &str,
 ) -> Result<(Vec<Fix>, Option<f64>)> {
-    if text.trim().is_empty() {
+    if crate::protect::blank(text) {
         return Ok((Vec::new(), None));
     }
     let prompt = system_prompt(text, dialect);

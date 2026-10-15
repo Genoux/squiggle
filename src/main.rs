@@ -58,6 +58,24 @@ fn run() -> Result<()> {
     bail!("the Linux surface is not built yet; `gramly check` works everywhere")
 }
 
+/// The model's fixes for `text`, asked a paragraph at a time as the app
+/// asks: sent whole, Coda's text came back without its blank lines, the
+/// lines no longer matched, and nothing was shown.
+fn by_paragraph(
+    text: &str,
+    ask: impl Fn(&str) -> Result<Vec<gramly_core::Fix>>,
+) -> Result<Vec<gramly_core::Fix>> {
+    let mut fixes = Vec::new();
+    for (offset, paragraph) in gramly_core::worker::asked(text) {
+        fixes.extend(ask(&paragraph)?.into_iter().map(|mut fix| {
+            fix.start += offset;
+            fix.end += offset;
+            fix
+        }));
+    }
+    Ok(fixes)
+}
+
 fn check(local_only: bool, improving: bool) -> Result<()> {
     let mut text = String::new();
     std::io::stdin().read_to_string(&mut text)?;
@@ -66,7 +84,7 @@ fn check(local_only: bool, improving: bool) -> Result<()> {
         let Some(key) = config.openrouter_key.as_deref() else {
             bail!("improvements need the model, and there is no OpenRouter key");
         };
-        let fixes = protect::keep(&text, improve::check(key, &text)?);
+        let fixes = protect::keep(&text, by_paragraph(&text, |p| improve::check(key, p))?);
         for fix in protect::keep_known(&text, fixes, &config::dictionary()) {
             println!(
                 "{:>4}..{:<4} {:?} -> {:?}",
@@ -83,7 +101,7 @@ fn check(local_only: bool, improving: bool) -> Result<()> {
     // What the app draws once the model has answered: the model's fixes
     // alone, or Harper's when the model is off.
     let fixes = match (&config.openrouter_key, config.ai && !local_only) {
-        (Some(key), true) => ai::check(key, &text, &config.dialect)?,
+        (Some(key), true) => by_paragraph(&text, |p| ai::check(key, p, &config.dialect))?,
         _ => local.check(&text),
     };
     let fixes = protect::keep(&text, fixes);
