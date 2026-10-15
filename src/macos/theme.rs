@@ -1,11 +1,13 @@
-//! Ink: one neutral palette per appearance, ink for the main action, and the
-//! underline's colour as the only colour Gramly draws. Nothing here belongs
-//! to macOS - no system accent, no vibrancy, no SF font - so the Linux
-//! surface can take the same values and look the same.
+//! Ink: one neutral palette per appearance, ink for the main action, and
+//! colour only where it means something - the underline, the words a fix
+//! takes out (red) and puts in (green). Nothing here belongs to macOS - no
+//! system accent, no vibrancy, no SF font - so the Linux surface can take
+//! the same values and look the same.
 //!
 //! It replaced Flow's palette, whose green carried every job (the fix, the
 //! button, the glow after Accept) and whose dark card sat on white documents
-//! too. The values match DESIGN.md.
+//! too. The values are the ones in design/tokens.json; a test holds them
+//! together.
 
 use gramly_core::Kind;
 use objc2::MainThreadMarker;
@@ -38,6 +40,16 @@ const fn hex(rgb: u32) -> Rgba {
     }
 }
 
+const fn hexa(rgb: u32, a: f64) -> Rgba {
+    let c = hex(rgb);
+    Rgba {
+        r: c.r,
+        g: c.g,
+        b: c.b,
+        a,
+    }
+}
+
 const fn black(a: f64) -> Rgba {
     Rgba {
         r: 0.0,
@@ -64,7 +76,7 @@ pub struct Palette {
     pub surface: Rgba,
     /// The sentence, button labels.
     pub text: Rgba,
-    /// Titles, struck words, hints.
+    /// Titles, hints.
     pub text2: Rgba,
     /// The outline of a secondary button and the field.
     pub line: Rgba,
@@ -78,6 +90,14 @@ pub struct Palette {
     pub edge: Rgba,
     /// How dark the card's soft shadow is.
     pub shadow: f32,
+    /// A word a correction takes out: struck, in red, line and letters
+    /// alike.
+    pub gone: Rgba,
+    /// A word clearer wording takes out, in blue.
+    pub gone_advice: Rgba,
+    /// A word a fix puts in: green, bold, on a green fill.
+    pub new: Rgba,
+    pub new_fill: Rgba,
 }
 
 pub const LIGHT: Palette = Palette {
@@ -91,6 +111,10 @@ pub const LIGHT: Palette = Palette {
     on_ink: hex(0xFFFFFF),
     edge: black(0.12),
     shadow: 0.2,
+    gone: hex(0xCE2C31),
+    gone_advice: hex(0x2F5BD3),
+    new: hex(0x18794E),
+    new_fill: hexa(0x30A46C, 0.15),
 };
 
 pub const DARK: Palette = Palette {
@@ -104,19 +128,29 @@ pub const DARK: Palette = Palette {
     on_ink: hex(0x18181B),
     edge: white(0.1),
     shadow: 0.7,
+    // Coral, GitHub's deleted code in its dark theme. A pale salmon
+    // (#FF9592) passed on contrast but read as pink, and under its darker
+    // line as two reds over each other.
+    gone: hex(0xFF7B72),
+    gone_advice: hex(0x9DB5FF),
+    new: hex(0x3DD68C),
+    new_fill: hexa(0x30A46C, 0.22),
 };
 
 /// Drawn over any app, light or dark, so the same in both appearances.
 pub const MISTAKE: Rgba = hex(0xE5484D);
 /// Clearer wording is advice, not an error: blue, as Grammarly draws it.
 pub const ADVICE: Rgba = hex(0x4A7BF7);
-/// The glow on a word just accepted: grey, so it reads on any app.
-pub const ACCEPTED: Rgba = Rgba {
-    r: 0.5,
-    g: 0.5,
-    b: 0.53,
-    a: 0.34,
-};
+/// The glow on a word just accepted: the fix's green, faint enough to read
+/// on any app.
+pub const ACCEPTED: Rgba = hexa(0x30A46C, 0.34);
+
+/// Corners. The card and the dictionary window; buttons and the field; the
+/// fill behind a new word and the glow on a word. 12, 8 and 5 read as
+/// bubbly.
+pub const CORNER: f64 = 8.0;
+pub const CORNER_CONTROL: f64 = 6.0;
+pub const CORNER_INLINE: f64 = 3.0;
 
 pub fn kind(kind: Kind) -> Rgba {
     match kind {
@@ -216,53 +250,6 @@ pub fn font(size: f64, weight: Weight) -> Retained<NSFont> {
     NSFont::systemFontOfSize_weight(size, weight)
 }
 
-/// Gramly's mark: a g whose tail is the underline, drawn on a 20pt grid.
-/// With no `tail` it is one colour and a template, for the menu bar; with
-/// one, the bowl takes the label colour and the tail that colour.
-pub fn mark(size: f64, tail: Option<Rgba>) -> Retained<NSImage> {
-    let draw = block2::RcBlock::new(move |_rect: CGRect| -> Bool {
-        let scale = size / 20.0;
-        let at = |x: f64, y: f64| CGPoint::new(x * scale, y * scale);
-        let stroke = |path: &NSBezierPath| {
-            path.setLineWidth(if tail.is_none() { 1.9 } else { 2.0 } * scale);
-            path.setLineCapStyle(NSLineCapStyle::Round);
-            path.stroke();
-        };
-        let ink = if tail.is_some() {
-            NSColor::labelColor()
-        } else {
-            NSColor::blackColor()
-        };
-        ink.setStroke();
-        let r = 4.25;
-        stroke(&NSBezierPath::bezierPathWithOvalInRect(CGRect::new(
-            at(9.0 - r, 8.25 - r),
-            CGSize::new(2.0 * r * scale, 2.0 * r * scale),
-        )));
-        let stem = NSBezierPath::bezierPath();
-        stem.moveToPoint(at(13.25, 4.0));
-        stem.lineToPoint(at(13.25, 13.75));
-        stem.curveToPoint_controlPoint1_controlPoint2(
-            at(10.0, 17.0),
-            at(13.25, 15.55),
-            at(11.8, 17.0),
-        );
-        stroke(&stem);
-        if let Some(tail) = tail {
-            ns(tail).setStroke();
-        }
-        let line = NSBezierPath::bezierPath();
-        line.moveToPoint(at(10.0, 17.0));
-        line.lineToPoint(at(3.5, 17.0));
-        stroke(&line);
-        Bool::YES
-    });
-    // Flipped, so the 20pt grid reads top-down like the SVG it came from.
-    let image = NSImage::imageWithSize_flipped_drawingHandler(CGSize::new(size, size), true, &draw);
-    image.setTemplate(tail.is_none());
-    image
-}
-
 /// A cross for closing and removing, as a template so it takes the button's
 /// tint.
 pub fn cross(size: f64) -> Retained<NSImage> {
@@ -282,4 +269,126 @@ pub fn cross(size: f64) -> Retained<NSImage> {
     let image = NSImage::imageWithSize_flipped_drawingHandler(CGSize::new(size, size), true, &draw);
     image.setTemplate(true);
     image
+}
+
+/// design/tokens.json is the design system's copy of these values, for the
+/// page and the Linux surface. These tests fail when the two disagree.
+#[cfg(test)]
+pub(crate) mod tokens {
+    use super::*;
+    use serde_json::Value;
+
+    pub(crate) fn load() -> Value {
+        serde_json::from_str(include_str!("../../design/tokens.json"))
+            .expect("design/tokens.json parses")
+    }
+
+    fn at<'a>(tokens: &'a Value, path: &str) -> &'a Value {
+        path.split('.').fold(tokens, |v, key| &v[key])
+    }
+
+    pub(crate) fn num(tokens: &Value, path: &str) -> f64 {
+        at(tokens, path)
+            .as_f64()
+            .unwrap_or_else(|| panic!("tokens.json has no number at {path}"))
+    }
+
+    fn color(tokens: &Value, path: &str) -> Rgba {
+        let text = at(tokens, path)
+            .as_str()
+            .unwrap_or_else(|| panic!("tokens.json has no colour at {path}"));
+        let digits = text.strip_prefix('#').expect("a colour starts with #");
+        let byte = |i: usize| f64::from(u8::from_str_radix(&digits[i..i + 2], 16).unwrap()) / 255.0;
+        Rgba {
+            r: byte(0),
+            g: byte(2),
+            b: byte(4),
+            a: if digits.len() == 8 { byte(6) } else { 1.0 },
+        }
+    }
+
+    /// Equal as #RRGGBBAA writes them: the channels exactly, the alpha to
+    /// the nearest step.
+    fn same(a: Rgba, b: Rgba) -> bool {
+        let exact = |x: f64, y: f64| (x - y).abs() < 1e-9;
+        exact(a.r, b.r)
+            && exact(a.g, b.g)
+            && exact(a.b, b.b)
+            && (a.a - b.a).abs() <= 0.5 / 255.0 + 1e-6
+    }
+
+    fn fields(p: &Palette) -> [(&'static str, Rgba); 13] {
+        [
+            ("surface", p.surface),
+            ("text", p.text),
+            ("text2", p.text2),
+            ("line", p.line),
+            ("fill", p.fill),
+            ("ink", p.ink),
+            ("ink_hover", p.ink_hover),
+            ("on_ink", p.on_ink),
+            ("edge", p.edge),
+            ("gone", p.gone),
+            ("gone_advice", p.gone_advice),
+            ("new", p.new),
+            ("new_fill", p.new_fill),
+        ]
+    }
+
+    #[test]
+    fn palettes_match_the_tokens() {
+        let t = load();
+        for (mode, p) in [("light", &LIGHT), ("dark", &DARK)] {
+            let listed = t["color"][mode].as_object().expect("a palette").len();
+            assert_eq!(listed, fields(p).len(), "{mode}: a colour on one side only");
+            for (name, ours) in fields(p) {
+                let theirs = color(&t, &format!("color.{mode}.{name}"));
+                assert!(
+                    same(ours, theirs),
+                    "{mode}.{name}: {ours:?} here, {theirs:?} in tokens.json"
+                );
+            }
+            let strength = num(&t, &format!("shadow.strength.{mode}"));
+            assert!(
+                (f64::from(p.shadow) - strength).abs() < 1e-6,
+                "{mode} shadow"
+            );
+        }
+        for (name, ours) in [
+            ("mistake", MISTAKE),
+            ("advice", ADVICE),
+            ("accepted", ACCEPTED),
+        ] {
+            let theirs = color(&t, &format!("color.both.{name}"));
+            assert!(
+                same(ours, theirs),
+                "both.{name}: {ours:?} here, {theirs:?} in tokens.json"
+            );
+        }
+    }
+
+    #[test]
+    fn corners_match_the_tokens() {
+        let t = load();
+        assert_eq!(num(&t, "corner.surface"), CORNER);
+        assert_eq!(num(&t, "corner.control"), CORNER_CONTROL);
+        assert_eq!(num(&t, "corner.inline"), CORNER_INLINE);
+    }
+
+    /// The page writes each colour as it is in the file, so one changed
+    /// here and not there is caught.
+    #[test]
+    fn the_page_shows_every_colour() {
+        let t = load();
+        let page = include_str!("../../design/index.html").to_uppercase();
+        for group in ["light", "dark", "both"] {
+            for (name, value) in t["color"][group].as_object().expect("a group") {
+                let hex = value.as_str().expect("a colour").to_uppercase();
+                assert!(
+                    page.contains(&hex),
+                    "design/index.html lacks {group}.{name} {hex}"
+                );
+            }
+        }
+    }
 }

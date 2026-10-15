@@ -13,8 +13,12 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
   platform assumption creeps in before the Linux surface exists.
 - `src/macos` is the surface: Accessibility in (`ax.rs`), panels out
   (`overlay.rs`), the run loop and menu (`app.rs`), the paste fallback
-  (`paste.rs`), the Ink palette, font and mark (`theme.rs`), and
+  (`paste.rs`), the Ink palette and font (`theme.rs`), and
   `gramly preview` (`preview.rs`).
+- `design/` is the design system: `index.html` shows every token and
+  component, `tokens.json` holds the values for the code and for the Linux
+  surface. It lives in the repo because the repo is private and the page must
+  change with the code; tests fail when either disagrees with the code.
 - One binary. Flow splits daemon and console because iced brings wgpu; Gramly
   draws with AppKit directly and has no settings window yet. If one is added
   with iced, it goes in its own workspace root like Flow's console.
@@ -363,8 +367,8 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
   not hide the same change elsewhere.
 - One card. Every suggestion - a spelling, a removal, several fixes in a
   sentence, clearer wording - shows its sentence with the change in place
-  (struck: what goes; bold on a fill: what comes), then a row of buttons,
-  all 32pt, the main one in ink. Out of its sentence a lone replacement
+  (struck in red: what goes; bold green on a green fill: what comes), then
+  a row of buttons, all 32pt, the main one in ink. Out of its sentence a lone replacement
   did not say why ("it's"), and a removal had to be shown as what was left
   ("me the" for "send me the the link"); `Remove “?”` before that made the
   reader work out the result. The sentence is cut to six words either
@@ -376,10 +380,18 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
   on abbreviations - a smaller group, never a wrong one. Accepting is a
   button, no longer a click on the replacement, which now sits inside the
   sentence.
-- The look is Ink (`theme.rs`, DESIGN.md): neutral surfaces, ink for the
-  main button, and the underline's colour as the only colour. It replaced
-  Flow's palette, whose green carried every job and whose dark card sat on
-  white documents. Nothing in it belongs to macOS - no vibrancy, system
+- The look is Ink (`theme.rs`, DESIGN.md, `design/`): neutral surfaces,
+  ink for the main button, and colour only where it means something: the
+  underline, a word going out (red, or blue for clearer wording) and a word
+  coming in (green). It replaced Flow's palette, whose green carried every
+  job and whose dark card sat on white documents. Struck words were grey
+  and new words bold on grey; the change only showed once read. Each word
+  has its colour in one place, letters and line in one red: in Dark a pale
+  salmon (#FF9592) under a darker red line read as two reds blurring, and
+  plain letters under a red line, tried next, lost the change in the
+  sentence. Dark's red is coral (#FF7B72, GitHub's deleted code); the
+  salmon passed on contrast but read as pink. Corners are 8, 6 and 3; 12, 8
+  and 5 read as bubbly. Nothing in it belongs to macOS - no vibrancy, system
   accent or SF font - because the Linux surface will draw the same thing.
   Cards and the dictionary take the system's light or dark appearance when
   they are built; underlines are the same in both, since the app
@@ -392,8 +404,11 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
   mouse (`shade`). The system's shadow would differ on Linux, and drawn in
   the card's own panel, its pixels would take clicks meant for the text below
   the card.
-- The menu bar icon is Gramly's mark, drawn in code (`theme::mark`): a g
-  whose tail is the underline. SF Symbols do not exist on Linux.
+- The menu bar icon is the system's spell-check symbol
+  (`text.badge.checkmark`), not a logo. A drawn mark (a g whose tail is the
+  underline) shipped in 0.2.0 and was taken out: the name will change, and
+  an alpha needs no brand. A Linux tray takes the icon theme's
+  `tools-check-spelling`.
 - `gramly preview [dir]` draws every card and the dictionary to PNG in both
   appearances, from the same code, in an off-screen window. Look at it
   before and after changing how they are drawn.

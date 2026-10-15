@@ -11,7 +11,6 @@ use crate::macos::ax::{self, Field};
 use crate::macos::dictionary::Dictionary;
 use crate::macos::overlay::{self, Mark, Overlay};
 use crate::macos::paste;
-use crate::macos::theme;
 use crate::macos::write;
 use gramly_core::worker::{Outcome, Worker};
 use gramly_core::{Config, Fix, Kind, config, merge, rebase, sentence};
@@ -22,8 +21,8 @@ use objc2::{
 };
 use objc2_app_kit::{
     NSAlert, NSAlertFirstButtonReturn, NSApplication, NSApplicationActivationPolicy, NSEvent,
-    NSMenu, NSMenuItem, NSSecureTextField, NSStatusBar, NSStatusItem, NSVariableStatusItemLength,
-    NSWorkspace,
+    NSImage, NSMenu, NSMenuItem, NSSecureTextField, NSStatusBar, NSStatusItem,
+    NSVariableStatusItemLength, NSWorkspace,
 };
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 use objc2_foundation::{NSString, NSTimer, NSURL};
@@ -53,7 +52,7 @@ const GRACE: u32 = 8;
 /// shown after all.
 const MODEL_LATE: Duration = Duration::from_secs(4);
 /// How long an accepted word glows.
-const FLASH: Duration = Duration::from_millis(380);
+pub(crate) const FLASH: Duration = Duration::from_millis(380);
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// "Pause for an hour". Held in memory: a restart is a fresh start.
 const PAUSE_FOR: Duration = Duration::from_secs(60 * 60);
@@ -1345,11 +1344,20 @@ fn build_menu(state: &mut State, controller: &Controller, mtm: MainThreadMarker)
     let bar = NSStatusBar::systemStatusBar();
     let item = bar.statusItemWithLength(NSVariableStatusItemLength);
     if let Some(button) = item.button(mtm) {
-        // Gramly's own mark rather than a system symbol: SF Symbols do not
-        // exist on Linux, and the tray icon should be the same there.
-        let image = theme::mark(18.0, None);
-        image.setAccessibilityDescription(Some(&NSString::from_str("Gramly")));
-        button.setImage(Some(&image));
+        // The system's spell-check symbol, not a logo: the name will change
+        // before there is one. A Linux tray takes the icon theme's
+        // equivalent (tools-check-spelling).
+        let image = NSImage::imageWithSystemSymbolName_accessibilityDescription(
+            &NSString::from_str("text.badge.checkmark"),
+            Some(&NSString::from_str("Gramly")),
+        );
+        match image {
+            Some(image) => {
+                image.setTemplate(true);
+                button.setImage(Some(&image));
+            }
+            None => button.setTitle(&NSString::from_str("✓")),
+        }
     }
 
     let menu = NSMenu::new(mtm);
