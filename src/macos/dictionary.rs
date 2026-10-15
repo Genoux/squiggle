@@ -21,7 +21,7 @@ use objc2::runtime::{AnyObject, NSObjectProtocol};
 use objc2::{AnyThread, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
     NSApplication, NSBackingStoreType, NSBorderType, NSButton, NSColor, NSFocusRingType,
-    NSFontAttributeName, NSForegroundColorAttributeName, NSImageView, NSLineBreakMode, NSResponder,
+    NSFontAttributeName, NSForegroundColorAttributeName, NSLineBreakMode, NSResponder,
     NSScrollView, NSTextAlignment, NSTextField, NSView, NSWindow, NSWindowStyleMask,
 };
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};
@@ -170,22 +170,20 @@ impl Dictionary {
         content.setWantsLayer(true);
         if let Some(layer) = content.layer() {
             layer.setBackgroundColor(Some(&theme::cg(p.surface)));
-            layer.setCornerRadius(12.0);
+            layer.setCornerRadius(theme::CORNER);
             layer.setBorderWidth(0.5);
             layer.setBorderColor(Some(&theme::cg(p.edge)));
         }
         let inner = WIDTH - PAD * 2.0;
 
-        // Header: the mark, the title, the close button.
-        let mark = NSImageView::imageViewWithImage(&theme::mark(20.0, Some(theme::MISTAKE)), mtm);
-        mark.setFrame(from_top(PAD, PAD, 20.0, 20.0, HEIGHT));
-        content.addSubview(&mark);
+        // Header: the title and the close button. No logo until the name
+        // is settled.
         let title = label("Dictionary", 15.0, Weight::Semibold, p.text, mtm);
         let title_h = title.fittingSize().height;
         title.setFrame(from_top(
-            PAD + 30.0,
+            PAD,
             PAD + ((20.0 - title_h) / 2.0).round(),
-            inner - 30.0 - 32.0,
+            inner - 32.0,
             title_h,
             HEIGHT,
         ));
@@ -223,7 +221,7 @@ impl Dictionary {
         );
         frame.setWantsLayer(true);
         if let Some(layer) = frame.layer() {
-            layer.setCornerRadius(8.0);
+            layer.setCornerRadius(theme::CORNER_CONTROL);
             layer.setBorderWidth(1.0);
             layer.setBorderColor(Some(&theme::cg(p.line)));
         }
@@ -412,5 +410,20 @@ impl Dictionary {
             1 => "1 word".into(),
             n => format!("{n} words"),
         }));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn measures_match_the_tokens() {
+        use crate::macos::theme::tokens::{load, num};
+        let t = load();
+        assert_eq!(num(&t, "dictionary.width"), WIDTH);
+        assert_eq!(num(&t, "dictionary.height"), HEIGHT);
+        assert_eq!(num(&t, "dictionary.padding"), PAD);
+        assert_eq!(num(&t, "dictionary.row"), ROW);
     }
 }

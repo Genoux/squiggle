@@ -90,7 +90,8 @@ cargo run -- preview      # draw every card and the dictionary to target/preview
 ```
 
 See [AGENTS.md](AGENTS.md) for why things are built the way they are,
-[DESIGN.md](DESIGN.md) for how the card and the dictionary look, and
+[DESIGN.md](DESIGN.md) for how the card and the dictionary look (the full
+design system is `design/index.html`, its values `design/tokens.json`), and
 [TROUBLESHOOTING.md](TROUBLESHOOTING.md) when something does not underline.
 
 The bundled font, Atkinson Hyperlegible Next, is under the SIL Open Font

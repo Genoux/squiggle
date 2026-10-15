@@ -1,11 +1,16 @@
 # Design
 
 Gramly's look is called Ink. It draws on top of other people's apps, so it
-stays quiet: neutral surfaces, one ink colour for the main action, and the
-underline's colour as the only colour on screen. Nothing in it belongs to
-macOS - no vibrancy, system accent or SF font - so the Linux surface draws
-the same thing. The values live in `src/macos/theme.rs`; `gramly preview`
-draws every card and the dictionary in both appearances.
+stays quiet: neutral surfaces, one ink colour for the main action, and colour
+only where it means something - the underline, the words a fix takes out
+(red) and puts in (green). Nothing in it belongs to macOS - no vibrancy,
+system accent or SF font - so the Linux surface draws the same thing.
+
+The design system is `design/index.html`: every token and component, in both
+appearances. Its values are `design/tokens.json`, which `cargo test` checks
+against `src/macos/theme.rs`, `overlay.rs` and `dictionary.rs`, and against the
+page itself. `gramly preview` draws every card and the dictionary from the
+app's own code.
 
 ## Colour
 
@@ -13,17 +18,23 @@ draws every card and the dictionary in both appearances.
 |---|---|---|---|
 | Surface | `#FFFFFF` | `#1C1C1F` | Cards and the dictionary |
 | Text | `#18181B` | `#EDEDEF` | The sentence, button labels |
-| Secondary | `#66666E` | `#A1A1AA` | Titles, struck words, hints |
+| Secondary | `#66666E` | `#A1A1AA` | Titles, hints |
 | Line | black 13% | white 13% | Outline of a secondary button and the field |
-| Fill | `#F0F0F2` | `#2B2B30` | New words, anything under the pointer |
+| Fill | `#F0F0F2` | `#2B2B30` | A secondary button under the pointer |
 | Ink | `#18181B` | `#EDEDEF` | The main button (`#303036` / `#FFFFFF` under the pointer) |
 | Edge | black 12% | white 10% | The hairline around a card |
-| Mistake | `#E5484D` | same | Red underline, the card's dot, the mark's tail |
+| Gone | `#CE2C31` | `#FF7B72` | A word a correction takes out, and the line through it |
+| Gone, wording | `#2F5BD3` | `#9DB5FF` | A word clearer wording takes out |
+| New | `#18794E` | `#3DD68C` | A word a fix puts in, bold |
+| New fill | `#30A46C` 15% | `#30A46C` 22% | Behind it |
+| Mistake | `#E5484D` | same | Red underline, the card's dot |
 | Clarity | `#4A7BF7` | same | Blue underline and the card's dot |
+| Accepted | `#30A46C` 34% | same | The glow on a word just accepted |
 
 Cards and the dictionary follow the system's appearance. Underlines and the
-grey glow on an accepted word are the same in both: the app underneath can
-be light or dark either way.
+glow are the same in both: the app underneath can be light or dark either
+way. Each changed word has its colour in one place: an old word's letters and
+line are the same red, a new word is green on green.
 
 ## Type
 
@@ -37,23 +48,28 @@ never look alike, which matters when the fix is a capital I.
 | Buttons | 13.5 / medium; the main one semibold |
 | Dictionary title | 15 / semibold |
 
+## Corners
+
+8 for the card and the dictionary, 6 for buttons and the field, 3 for a new
+word's fill and the glow on a word.
+
 ## The card
 
 One layout for every suggestion: a dot in the underline's colour and a
-title; the sentence with the change in place, struck for what goes and bold
-on a fill for what comes; then a row of buttons.
+title; the sentence with the change in place, struck in red for what goes
+and bold green on a fill for what comes; then a row of buttons.
 
-- 340 wide, 16 padding, 12 corners. A hairline edge and a two-layer shadow
-  drawn by Gramly, not the system.
+- 340 wide, 16 padding. A hairline edge and a two-layer shadow drawn by
+  Gramly, not the system.
 - 10 between the title and the sentence, 16 above the buttons, 8 between
   buttons.
-- Every button is 32 high, 12 at the sides, 8 corners. The main one is
-  solid ink; the others are outlined and fill in under the pointer.
+- Every button is 32 high, 12 at the sides. The main one is solid ink; the
+  others are outlined and fill in under the pointer.
 - The sentence is cut to six words either side of the change.
 - It fades in over 140ms, moving its last 3pt towards its word. Nothing
   else moves.
 
-## The mark
+## The menu bar
 
-A g whose tail is the underline. One colour in the menu bar or a tray; with
-its tail in the mistake red where Gramly draws in its own colours.
+The system's spell-check symbol, not a logo: the name will change before
+Gramly has a mark. A Linux tray takes the icon theme's `tools-check-spelling`.

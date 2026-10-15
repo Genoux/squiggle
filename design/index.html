@@ -1,0 +1,496 @@
+<!doctype html>
+<html lang="en" data-appearance="light" data-spacing="off">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ink, Gramly's design system</title>
+<meta name="description" content="Colours, type, measures and components for Gramly's card, underlines and dictionary.">
+<script>
+  (function () {
+    var mode = null;
+    try { mode = localStorage.getItem('gramly-ink-appearance'); } catch (e) {}
+    if (!mode) mode = window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    document.documentElement.dataset.appearance = mode;
+  })();
+</script>
+<style>
+  /* The font is the app's own, from the repo. If a browser refuses to load
+     it from disk, the page falls back to the system font. */
+  @font-face { font-family: "Gramly"; font-weight: 400; src: url("../assets/fonts/AtkinsonHyperlegibleNext-Regular.ttf") format("truetype"); }
+  @font-face { font-family: "Gramly"; font-weight: 500; src: url("../assets/fonts/AtkinsonHyperlegibleNext-Medium.ttf") format("truetype"); }
+  @font-face { font-family: "Gramly"; font-weight: 600; src: url("../assets/fonts/AtkinsonHyperlegibleNext-SemiBold.ttf") format("truetype"); }
+
+  /* ============ Gramly's tokens, as in tokens.json ============ */
+  :root, .lt {
+    --surface: #FFFFFF; --text: #18181B; --text2: #66666E; --line: #00000021; --fill: #F0F0F2;
+    --ink: #18181B; --ink-hover: #303036; --on-ink: #FFFFFF; --edge: #0000001F;
+    --gone: #CE2C31; --gone-advice: #2F5BD3; --new: #18794E; --new-fill: #30A46C26;
+    --shadow: 0 0 0 .5px var(--edge), 0 1px 2px rgba(0,0,0,.08), 0 14px 36px -12px rgba(0,0,0,.2);
+    /* the page around them */
+    --pg: #F4F4F5; --pg-ink: #18181B; --pg-ink2: #66666E; --pg-rule: #0000001A; --pg-well: #E4E4E8; --pg-seg: #FFFFFF;
+    color-scheme: light;
+  }
+  [data-appearance="dark"], .dk {
+    --surface: #1C1C1F; --text: #EDEDEF; --text2: #A1A1AA; --line: #FFFFFF21; --fill: #2B2B30;
+    --ink: #EDEDEF; --ink-hover: #FFFFFF; --on-ink: #18181B; --edge: #FFFFFF1A;
+    --gone: #FF7B72; --gone-advice: #9DB5FF; --new: #3DD68C; --new-fill: #30A46C38;
+    --shadow: 0 0 0 .5px var(--edge), 0 1px 2px rgba(0,0,0,.28), 0 14px 36px -12px rgba(0,0,0,.7);
+    --pg: #0E0E10; --pg-ink: #EDEDEF; --pg-ink2: #9C9CA4; --pg-rule: #FFFFFF17; --pg-well: #18181B; --pg-seg: #36363B;
+    color-scheme: dark;
+  }
+  .lt { color-scheme: light; }
+  :root { --mistake: #E5484D; --advice: #4A7BF7; --accepted: #30A46C57;
+    --font: "Gramly", "Atkinson Hyperlegible Next", system-ui, sans-serif;
+    --corner: 8px; --corner-control: 6px; --corner-inline: 3px; }
+
+  /* ============ Page ============ */
+  * { box-sizing: border-box; margin: 0; }
+  html { background: var(--pg); scroll-padding-top: 24px; }
+  body { font: 15px/1.6 system-ui, -apple-system, "Segoe UI", "Noto Sans", Cantarell, sans-serif; color: var(--pg-ink);
+    background: var(--pg); -webkit-font-smoothing: antialiased; }
+  button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: default; }
+  button:focus-visible, a:focus-visible { outline: 2px solid var(--pg-ink); outline-offset: 2px; border-radius: 2px; }
+  a { color: var(--pg-ink); text-underline-offset: 3px; text-decoration-color: var(--pg-ink2); }
+  ul { padding: 0; list-style: none; }
+  code { font: 500 .86em ui-monospace, "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace; }
+
+  .shell { display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 56px; max-width: 1180px; margin: 0 auto; padding: 0 24px 120px; }
+  nav.toc { position: sticky; top: 0; align-self: start; padding: 48px 0 24px; font-size: 13.5px; }
+  .toc .brand { display: flex; align-items: center; gap: 10px; font-weight: 650; font-size: 15px; margin-bottom: 28px; }
+  .toc p { font-size: 11.5px; font-weight: 600; color: var(--pg-ink2); text-transform: uppercase; letter-spacing: .06em; margin: 18px 0 6px; }
+  .toc a { display: block; padding: 3px 0; color: var(--pg-ink2); text-decoration: none; }
+  .toc a:hover { color: var(--pg-ink); }
+  main { min-width: 0; padding-top: 48px; }
+  @media (max-width: 860px) { .shell { grid-template-columns: minmax(0, 1fr); padding: 0 16px 96px; gap: 0; } nav.toc { display: none; } main { padding-top: 32px; } }
+
+  header.hero { padding-bottom: 40px; }
+  .hero .kicker { font-size: 13px; font-weight: 500; color: var(--pg-ink2); }
+  h1 { font-size: 48px; line-height: 1.05; font-weight: 680; letter-spacing: -.03em; margin-top: 6px; }
+  .lede { margin-top: 18px; max-width: 62ch; font-size: 17px; color: var(--pg-ink2); }
+  .lede strong { color: var(--pg-ink); font-weight: 600; }
+  .bar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 24px; margin-top: 28px; font-size: 13px; color: var(--pg-ink2); }
+  .seg { display: inline-flex; padding: 2px; border-radius: 8px; background: var(--pg-rule); }
+  .seg button { padding: 4px 12px; border-radius: 6px; font-size: 13px; font-weight: 500; color: var(--pg-ink2); white-space: nowrap; }
+  .seg button[aria-pressed="true"] { background: var(--pg-seg); color: var(--pg-ink); box-shadow: 0 1px 2px #00000024; }
+  .bar .files { display: flex; flex-wrap: wrap; gap: 6px 16px; }
+  @media (max-width: 560px) { h1 { font-size: 38px; } }
+
+  section { border-top: 1px solid var(--pg-rule); padding: 44px 0; }
+  h2 { font-size: 26px; line-height: 1.2; font-weight: 650; letter-spacing: -.02em; }
+  h2 + p, .intro { color: var(--pg-ink2); margin-top: 8px; max-width: 66ch; }
+  h3 { font-size: 15px; font-weight: 650; margin: 32px 0 4px; }
+  h3 + p { color: var(--pg-ink2); font-size: 14px; max-width: 66ch; }
+  .well { margin-top: 20px; background: var(--pg-well); border-radius: 12px; padding: 28px; }
+  @media (max-width: 560px) { .well { padding: 20px 16px; } }
+  .row { display: flex; flex-wrap: wrap; gap: 28px 24px; align-items: flex-start; }
+  .label { font-size: 12px; font-weight: 500; color: var(--pg-ink2); margin-bottom: 10px; }
+  .note { margin-top: 14px; font-size: 13px; color: var(--pg-ink2); max-width: 66ch; }
+
+  /* Principles */
+  .principles { margin-top: 20px; display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 0 32px; }
+  .principles li { padding: 14px 0; border-top: 1px solid var(--pg-rule); font-size: 14.5px; color: var(--pg-ink2); }
+  .principles strong { display: block; color: var(--pg-ink); font-weight: 600; margin-bottom: 2px; }
+
+  /* Colour tables */
+  table.tokens { width: 100%; margin-top: 16px; border-collapse: collapse; font-size: 13.5px; }
+  .tokens th { text-align: left; font-size: 12px; font-weight: 500; color: var(--pg-ink2); padding: 0 12px 8px 0; white-space: nowrap; }
+  .tokens td { padding: 9px 12px 9px 0; border-top: 1px solid var(--pg-rule); vertical-align: middle; }
+  .tokens td:first-child { font-weight: 600; white-space: nowrap; }
+  .tokens td.use { color: var(--pg-ink2); }
+  .sw { display: inline-flex; align-items: center; gap: 8px; font: 500 12px ui-monospace, "SF Mono", Menlo, Consolas, monospace; color: var(--pg-ink2); white-space: nowrap; }
+  .sw i { width: 20px; height: 20px; border-radius: 5px; flex: none; box-shadow: inset 0 0 0 1px #8080804D; }
+  .sw i.on-l { background-color: #FFFFFF; } .sw i.on-d { background-color: #1C1C1F; }
+  @media (max-width: 720px) { .tokens .use { display: none; } .tokens td, .tokens th { padding-right: 8px; } }
+
+  /* Type */
+  .specimen li { display: grid; grid-template-columns: 170px minmax(0, 1fr); gap: 6px 24px; align-items: baseline; padding: 14px 0; border-top: 1px solid var(--pg-rule); }
+  .specimen .spec { font-size: 12.5px; color: var(--pg-ink2); }
+  .specimen .spec b { display: block; color: var(--pg-ink); font-weight: 600; font-size: 13.5px; }
+  .specimen .s { font-family: var(--font); color: var(--pg-ink); }
+  @media (max-width: 560px) { .specimen li { grid-template-columns: minmax(0, 1fr); } }
+
+  /* Measures and corners */
+  .measures { margin-top: 16px; display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 0 32px; }
+  .measures li { display: flex; justify-content: space-between; gap: 16px; padding: 10px 0; border-top: 1px solid var(--pg-rule); font-size: 13.5px; }
+  .measures li span:first-child { font-weight: 600; }
+  .measures li span:last-child { color: var(--pg-ink2); text-align: right; }
+  .corners { display: flex; flex-wrap: wrap; gap: 20px; }
+  .corner-box { width: 140px; height: 96px; background: var(--surface); box-shadow: var(--shadow); display: flex; flex-direction: column; justify-content: flex-end; padding: 12px; font-size: 12.5px; color: var(--text2); }
+  .corner-box b { color: var(--text); font-size: 20px; font-weight: 650; line-height: 1.1; }
+
+  /* ============ Gramly components ============ */
+  .g { font-family: var(--font); color: var(--text); -webkit-font-smoothing: antialiased; text-align: left; }
+
+  .g-card { width: 340px; max-width: 100%; padding: 16px; border-radius: var(--corner); background: var(--surface); box-shadow: var(--shadow); }
+  .g-head { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 500; line-height: 18px; color: var(--text2); }
+  .g-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--mistake); flex: none; }
+  .advice .g-dot { background: var(--advice); }
+  .g-text { margin-top: 10px; font-size: 15px; line-height: 24px; text-wrap: pretty; }
+  .g-text del { color: var(--gone); text-decoration-thickness: 1px; text-decoration-color: currentColor; }
+  .advice .g-text del { color: var(--gone-advice); }
+  .g-text ins { text-decoration: none; font-weight: 600; color: var(--new); background: var(--new-fill); border-radius: var(--corner-inline);
+    padding: 2px 4px; margin: 0 1px; -webkit-box-decoration-break: clone; box-decoration-break: clone; }
+  .g-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+
+  /* Buttons change at once under the pointer: nothing in Gramly animates but the card's arrival. */
+  .g-btn { height: 32px; padding: 0 12px; border-radius: var(--corner-control); font-size: 13.5px; font-weight: 500; line-height: 1; white-space: nowrap;
+    color: var(--text); box-shadow: inset 0 0 0 1px var(--line); }
+  .g-btn:hover, .g-btn.is-hover { background: var(--fill); box-shadow: none; }
+  .g-btn.main { background: var(--ink); color: var(--on-ink); box-shadow: none; font-weight: 600; }
+  .g-btn.main:hover, .g-btn.main.is-hover { background: var(--ink-hover); }
+
+  .g-icon { width: 28px; height: 28px; display: grid; place-items: center; border-radius: var(--corner-control); color: var(--text2); flex: none; }
+  .g-icon svg { width: 14px; height: 14px; }
+
+  .g-window { width: 320px; max-width: 100%; padding: 16px; border-radius: var(--corner); background: var(--surface); box-shadow: var(--shadow); }
+  .g-window-head { display: flex; align-items: center; gap: 10px; }
+  .g-window-head h4 { flex: 1; font-size: 15px; font-weight: 600; line-height: 20px; }
+  .g-window-head .g-icon { margin: -4px -6px -4px 0; }
+  .g-sub { margin-top: 4px; font-size: 13px; color: var(--text2); }
+  .g-add { display: flex; gap: 8px; margin-top: 16px; }
+  .g-field { flex: 1; min-width: 0; height: 32px; display: flex; align-items: center; padding: 0 10px; border-radius: var(--corner-control); font-size: 14px;
+    color: var(--text2); box-shadow: inset 0 0 0 1px var(--line); }
+  .g-words { margin-top: 12px; }
+  .g-words li { height: 36px; display: flex; align-items: center; justify-content: space-between; font-size: 14px; }
+  .g-words .g-icon { margin-right: -6px; }
+  .g-count { margin-top: 8px; font-size: 12.5px; color: var(--text2); }
+
+  /* Spacing shown: padding and gaps as tint */
+  [data-spacing="on"] .spaced .g-card { background: #4A7BF740; }
+  [data-spacing="on"] .spaced .g-card > * { background: var(--surface); }
+  [data-spacing="on"] .spaced .g-card > .g-actions { background: transparent; }
+  [data-spacing="on"] .spaced .g-btn:not(.main) { background: var(--surface); }
+
+  /* Underlines, in an app of either appearance */
+  .app { flex: 1 1 280px; min-width: 0; border-radius: 10px; padding: 18px 20px; font: 15px/26px Arial, Helvetica, sans-serif; }
+  .app.light { background: #FFFFFF; color: #202124; box-shadow: 0 0 0 1px #0000001A; }
+  .app.dark { background: #1E1F22; color: #DBDEE1; box-shadow: 0 0 0 1px #FFFFFF14; }
+  .u { background-repeat: no-repeat; background-image: linear-gradient(var(--u), var(--u)); background-size: 100% 2px; background-position: 0 100%;
+    padding-bottom: 2px; border-radius: 2px; -webkit-box-decoration-break: clone; box-decoration-break: clone; }
+  .u.m { --u: var(--mistake); --uf: #E5484D29; }
+  .u.c { --u: var(--advice); --uf: #4A7BF729; }
+  .u.open, .u:hover { background-image: linear-gradient(var(--u), var(--u)), linear-gradient(var(--uf), var(--uf)); background-size: 100% 2px, 100% 100%; background-position: 0 100%, 0 0; }
+  .glow { border-radius: var(--corner-inline); background: var(--accepted); }
+  .glow.play { animation: glow .38s steps(1, end) forwards; }
+  @keyframes glow { to { background: transparent; } }
+
+  /* The change: right and wrong */
+  .dodont { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; margin-top: 20px; }
+  .dd { border-radius: 12px; padding: 18px 20px; background: var(--surface); box-shadow: var(--shadow); }
+  .dd .verdict { display: flex; align-items: center; gap: 8px; font-size: 12.5px; font-weight: 600; margin-bottom: 10px; }
+  .dd .verdict i { width: 16px; height: 16px; border-radius: 50%; display: grid; place-items: center; font-style: normal; font-size: 11px; color: #FFFFFF; }
+  .dd.yes .verdict i { background: #30A46C; } .dd.no .verdict i { background: #E5484D; }
+  .dd p.why { margin-top: 10px; font-size: 13px; color: var(--text2); line-height: 1.5; }
+  .dd .g-text { margin-top: 0; }
+  .dd.no .twotone del { color: #FF9592; text-decoration-color: #E5484D; text-decoration-thickness: 1.5px; }
+  .dd.no .plain del { color: var(--text); text-decoration-color: var(--mistake); text-decoration-thickness: 2px; }
+  .dd.no .plain ins { color: var(--text); }
+
+  /* Motion */
+  .stage { position: relative; height: 230px; display: grid; place-items: center; flex: 1 1 340px; min-width: 0; }
+  .apps-col { flex: 1 1 260px; min-width: 0; display: flex; flex-direction: column; gap: 12px; justify-content: center; }
+  .apps-col .app { flex: none; }
+  .g-card.arrive { animation: arrive .14s cubic-bezier(.2,.8,.2,1); }
+  @keyframes arrive { from { opacity: 0; transform: translateY(-3px); } }
+
+  .files-list li { padding: 10px 0; border-top: 1px solid var(--pg-rule); font-size: 14px; color: var(--pg-ink2); }
+  .files-list code { color: var(--pg-ink); }
+
+  @media (prefers-reduced-motion: reduce) { .g-card.arrive, .glow.play { animation: none; } }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="x" viewBox="0 0 16 16"><path d="M4.5 4.5l7 7M11.5 4.5l-7 7" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
+</svg>
+
+<div class="shell">
+  <nav class="toc" aria-label="Contents">
+    <div class="brand">Ink</div>
+    <p>Foundations</p>
+    <a href="#principles">Principles</a><a href="#colour">Colour</a><a href="#type">Type</a><a href="#measures">Measures</a><a href="#corners">Corners and depth</a><a href="#motion">Motion</a>
+    <p>Components</p>
+    <a href="#underline">Underline</a><a href="#change">The change</a><a href="#card">Card</a><a href="#button">Button</a><a href="#dictionary">Dictionary</a>
+    <p>Working on it</p>
+    <a href="#files">Files</a>
+  </nav>
+
+  <main>
+    <header class="hero">
+      <div class="kicker">Gramly's design system</div>
+      <h1>Ink</h1>
+      <p class="lede"><strong>Gramly draws on top of other people's apps, so it stays quiet.</strong> It uses neutral surfaces, black or white for the main action, and colour only where colour means something. Nothing here belongs to macOS, so the Linux surface draws the same thing.</p>
+      <div class="bar">
+        <span>Appearance</span>
+        <div class="seg" role="group" aria-label="Appearance"><button type="button" data-key="appearance" data-val="light">Light</button><button type="button" data-key="appearance" data-val="dark">Dark</button></div>
+        <span class="files">Values: <a href="tokens.json">tokens.json</a> · <a href="../src/macos/theme.rs">theme.rs</a> · <a href="../DESIGN.md">DESIGN.md</a></span>
+      </div>
+    </header>
+
+    <section id="principles">
+      <h2>Principles</h2>
+      <ul class="principles">
+        <li><strong>Quiet on top of anything</strong>Neutral surfaces in the system's light or dark. Underlines look the same in both, because the app underneath can be either.</li>
+        <li><strong>Colour means wrong or right</strong>Red is a mistake and the words it takes out. Blue is clearer wording. Green is what a fix puts in. Colour never means "click here".</li>
+        <li><strong>One of each</strong>One card for every suggestion, one button size and one motion. A new kind of suggestion fits the card; it doesn't get its own.</li>
+        <li><strong>The same everywhere</strong>Gramly brings its own font and shadow. It uses no system accent, no vibrancy and no SF font, so a Mac and Hyprland look alike.</li>
+      </ul>
+    </section>
+
+    <section id="colour">
+      <h2>Colour</h2>
+      <p>Every colour Gramly draws, in both appearances. The card and the dictionary follow the system; the colours under <em>Both</em> are drawn over other apps and never change.</p>
+
+      <h3>Surfaces and text</h3>
+      <table class="tokens">
+        <thead><tr><th>Token</th><th>Light</th><th>Dark</th><th class="use">Used for</th></tr></thead>
+        <tbody>
+          <tr><td><code>surface</code></td><td><span class="sw"><i style="background:#FFFFFF"></i>#FFFFFF</span></td><td><span class="sw"><i style="background:#1C1C1F"></i>#1C1C1F</span></td><td class="use">The card and the dictionary</td></tr>
+          <tr><td><code>text</code></td><td><span class="sw"><i style="background:#18181B"></i>#18181B</span></td><td><span class="sw"><i style="background:#EDEDEF"></i>#EDEDEF</span></td><td class="use">The sentence, button labels, words in the list</td></tr>
+          <tr><td><code>text2</code></td><td><span class="sw"><i style="background:#66666E"></i>#66666E</span></td><td><span class="sw"><i style="background:#A1A1AA"></i>#A1A1AA</span></td><td class="use">The card's title, hints, the word count, the close cross</td></tr>
+          <tr><td><code>line</code></td><td><span class="sw"><i class="on-l" style="background-image:linear-gradient(#00000021,#00000021)"></i>#00000021</span></td><td><span class="sw"><i class="on-d" style="background-image:linear-gradient(#FFFFFF21,#FFFFFF21)"></i>#FFFFFF21</span></td><td class="use">The outline of a secondary button and the field</td></tr>
+          <tr><td><code>fill</code></td><td><span class="sw"><i style="background:#F0F0F2"></i>#F0F0F2</span></td><td><span class="sw"><i style="background:#2B2B30"></i>#2B2B30</span></td><td class="use">A secondary button under the pointer</td></tr>
+          <tr><td><code>edge</code></td><td><span class="sw"><i class="on-l" style="background-image:linear-gradient(#0000001F,#0000001F)"></i>#0000001F</span></td><td><span class="sw"><i class="on-d" style="background-image:linear-gradient(#FFFFFF1A,#FFFFFF1A)"></i>#FFFFFF1A</span></td><td class="use">The half-point hairline around the card and the window</td></tr>
+        </tbody>
+      </table>
+
+      <h3>Action</h3>
+      <table class="tokens">
+        <thead><tr><th>Token</th><th>Light</th><th>Dark</th><th class="use">Used for</th></tr></thead>
+        <tbody>
+          <tr><td><code>ink</code></td><td><span class="sw"><i style="background:#18181B"></i>#18181B</span></td><td><span class="sw"><i style="background:#EDEDEF"></i>#EDEDEF</span></td><td class="use">The main button: Accept, Correct the sentence</td></tr>
+          <tr><td><code>ink_hover</code></td><td><span class="sw"><i style="background:#303036"></i>#303036</span></td><td><span class="sw"><i style="background:#FFFFFF"></i>#FFFFFF</span></td><td class="use">The main button under the pointer</td></tr>
+          <tr><td><code>on_ink</code></td><td><span class="sw"><i style="background:#FFFFFF"></i>#FFFFFF</span></td><td><span class="sw"><i style="background:#18181B"></i>#18181B</span></td><td class="use">Its label</td></tr>
+        </tbody>
+      </table>
+
+      <h3>Meaning</h3>
+      <table class="tokens">
+        <thead><tr><th>Token</th><th>Light</th><th>Dark</th><th class="use">Used for</th></tr></thead>
+        <tbody>
+          <tr><td><code>gone</code></td><td><span class="sw"><i style="background:#CE2C31"></i>#CE2C31</span></td><td><span class="sw"><i style="background:#FF7B72"></i>#FF7B72</span></td><td class="use">A word a correction takes out, and the line through it</td></tr>
+          <tr><td><code>gone_advice</code></td><td><span class="sw"><i style="background:#2F5BD3"></i>#2F5BD3</span></td><td><span class="sw"><i style="background:#9DB5FF"></i>#9DB5FF</span></td><td class="use">A word clearer wording takes out</td></tr>
+          <tr><td><code>new</code></td><td><span class="sw"><i style="background:#18794E"></i>#18794E</span></td><td><span class="sw"><i style="background:#3DD68C"></i>#3DD68C</span></td><td class="use">A word a fix puts in, bold</td></tr>
+          <tr><td><code>new_fill</code></td><td><span class="sw"><i class="on-l" style="background-image:linear-gradient(#30A46C26,#30A46C26)"></i>#30A46C26</span></td><td><span class="sw"><i class="on-d" style="background-image:linear-gradient(#30A46C38,#30A46C38)"></i>#30A46C38</span></td><td class="use">Behind it</td></tr>
+        </tbody>
+      </table>
+
+      <h3>Both appearances</h3>
+      <table class="tokens">
+        <thead><tr><th>Token</th><th colspan="2">Value</th><th class="use">Used for</th></tr></thead>
+        <tbody>
+          <tr><td><code>mistake</code></td><td colspan="2"><span class="sw"><i style="background:#E5484D"></i>#E5484D</span></td><td class="use">The underline of a mistake, and the card's dot</td></tr>
+          <tr><td><code>advice</code></td><td colspan="2"><span class="sw"><i style="background:#4A7BF7"></i>#4A7BF7</span></td><td class="use">The underline of clearer wording, and its dot</td></tr>
+          <tr><td><code>accepted</code></td><td colspan="2"><span class="sw"><i class="on-l" style="background-image:linear-gradient(#30A46C57,#30A46C57)"></i>#30A46C57</span></td><td class="use">The glow on a word just accepted</td></tr>
+        </tbody>
+      </table>
+      <p class="note">Every text colour reaches 4.5:1 on its surface or fill. The dark <code>gone</code> is coral, the red GitHub uses for deleted code in its dark theme. A pale salmon passed on contrast, but it read as pink.</p>
+    </section>
+
+    <section id="type">
+      <h2>Type</h2>
+      <p>Atkinson Hyperlegible Next, bundled in the app (SIL Open Font License). Its I, l and 1 never look alike, which matters when the fix is a capital I. Three weights only: regular, medium and semibold.</p>
+      <ul class="specimen">
+        <li><span class="spec"><b>Sentence</b>15 regular on a 24 line</span><span class="s" style="font-size:15px;line-height:24px">Did you receive the photos? Il, 1I, 0O.</span></li>
+        <li><span class="spec"><b>New words</b>15 semibold</span><span class="s" style="font-size:15px;font-weight:600">receive, Monday, it's</span></li>
+        <li><span class="spec"><b>Window title</b>15 semibold</span><span class="s" style="font-size:15px;font-weight:600">Dictionary</span></li>
+        <li><span class="spec"><b>Field and list</b>14 regular</span><span class="s" style="font-size:14px">Hyprland</span></li>
+        <li><span class="spec"><b>Buttons</b>13.5 medium, main semibold</span><span class="s" style="font-size:13.5px;font-weight:500">Dismiss · <span style="font-weight:600">Accept</span></span></li>
+        <li><span class="spec"><b>Card title</b>13 medium, <code>text2</code></span><span class="s" style="font-size:13px;font-weight:500;color:var(--pg-ink2)">Correct your spelling</span></li>
+        <li><span class="spec"><b>Hint</b>13 regular, <code>text2</code></span><span class="s" style="font-size:13px;color:var(--pg-ink2)">Gramly never flags these words.</span></li>
+        <li><span class="spec"><b>Count</b>12.5 regular, <code>text2</code></span><span class="s" style="font-size:12.5px;color:var(--pg-ink2)">7 words</span></li>
+      </ul>
+    </section>
+
+    <section id="measures">
+      <h2>Measures</h2>
+      <p>One width for every card, one height for every button. Turn on the spacing to see the padding and gaps as tint.</p>
+      <div class="bar"><span>Spacing</span><div class="seg" role="group" aria-label="Spacing"><button type="button" data-key="spacing" data-val="off">Hide</button><button type="button" data-key="spacing" data-val="on">Show</button></div></div>
+      <div class="well spaced">
+        <div class="g g-card">
+          <div class="g-head"><span class="g-dot"></span>Correct your spelling</div>
+          <p class="g-text">Did you <del>recieve</del> <ins>receive</ins> the photos?</p>
+          <div class="g-actions"><button class="g-btn main" type="button">Accept</button><button class="g-btn" type="button">Dismiss</button><button class="g-btn" type="button">Add to dictionary</button></div>
+        </div>
+      </div>
+      <ul class="measures">
+        <li><span>Card</span><span>340 wide · 16 padding</span></li>
+        <li><span>Card gaps</span><span>10 under the title · 16 above the buttons</span></li>
+        <li><span>Buttons</span><span>32 high · 12 at the sides · 8 apart</span></li>
+        <li><span>The dot</span><span>7, centred on the title's 18 line</span></li>
+        <li><span>The sentence</span><span>6 words of context either side</span></li>
+        <li><span>Underline</span><span>2 high, the word's width</span></li>
+        <li><span>Dictionary</span><span>320 × 460 · 16 padding · rows 36</span></li>
+        <li><span>Hairline</span><span>0.5, one pixel on a Retina screen</span></li>
+      </ul>
+    </section>
+
+    <section id="corners">
+      <h2>Corners and depth</h2>
+      <p>Three corners, from the window down to a word. They were 12, 8 and 5, which read as bubbly.</p>
+      <div class="well">
+        <div class="corners">
+          <div class="corner-box" style="border-radius:var(--corner)"><b>8</b>Card, dictionary</div>
+          <div class="corner-box" style="border-radius:var(--corner-control)"><b>6</b>Buttons, the field</div>
+          <div class="corner-box" style="border-radius:var(--corner-inline)"><b>3</b>A new word's fill, a glow</div>
+        </div>
+      </div>
+      <h3>The card's shadow</h3>
+      <p>Gramly draws its own, in a panel that ignores the pointer, so it looks the same on Linux and clicks beside the card reach the text. It has a half-point hairline (<code>edge</code>), a tight shadow at the edge (drop 1, blur 2) and a soft one below (inset 12, drop 14, blur 18). It's stronger in Dark (0.7) than in Light (0.2), because a shadow barely shows on a dark app. The dictionary uses the system's window shadow for now.</p>
+    </section>
+
+    <section id="motion">
+      <h2>Motion</h2>
+      <p>Only two things move. The card fades in over 140ms, moving its last 3 points towards its word. A word you accept glows green for 380ms. Nothing else animates, not even a button under the pointer.</p>
+      <div class="well">
+        <div class="row">
+          <div class="stage"><div class="g g-card" id="arrive">
+            <div class="g-head"><span class="g-dot"></span>Correct your spelling</div>
+            <p class="g-text">Did you <del>recieve</del> <ins>receive</ins> the photos?</p>
+            <div class="g-actions"><button class="g-btn main" type="button">Accept</button><button class="g-btn" type="button">Dismiss</button></div>
+          </div></div>
+          <div class="apps-col">
+            <div class="app light">Did you <span class="glow" data-glow>receive</span> the photos?</div>
+            <div class="app dark">i think <span class="glow" data-glow>it's</span> fine</div>
+          </div>
+        </div>
+      </div>
+      <div class="bar"><button type="button" class="seg" id="replay" style="padding:4px 12px;font-weight:500">Play again</button></div>
+    </section>
+
+    <section id="underline">
+      <h2>Underline</h2>
+      <p>Two points high under the word, in red for a mistake or blue for clearer wording. While the word's card is open, the word also gets a tint of the same colour at 16%. It's the same in light and dark apps.</p>
+      <div class="well">
+        <div class="row">
+          <div class="app light">Did you <span class="u m open">recieve</span> the photos? Send me the <span class="u m">the</span> link. I think <span class="u c">it would maybe be better if we could try to</span> move it.</div>
+          <div class="app dark"><span class="u m">i</span> think <span class="u m open">its</span> fine, <span class="u m">lets</span> ship it <span class="u m">monday</span></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="change">
+      <h2>The change</h2>
+      <p>Inside the card, the sentence shows the change in place: what goes is struck, what comes is bold. Each word gets its colour in one place only. The old word's letters and line are red; the new word is green on a green fill.</p>
+      <div class="dodont">
+        <div class="dd yes"><div class="verdict"><i>✓</i>Do</div><p class="g-text">Did you <del>recieve</del> <ins>receive</ins> the photos?</p><p class="why">Red letters with a line in the same red, then green on green. Each word is one mark.</p></div>
+        <div class="dd no"><div class="verdict"><i>✕</i>Don't</div><p class="g-text twotone">Did you <del>recieve</del> <ins>receive</ins> the photos?</p><p class="why">Pale red letters under a darker red line. In Dark, the two reds blur together.</p></div>
+        <div class="dd no"><div class="verdict"><i>✕</i>Don't</div><p class="g-text plain">Did you <del>recieve</del> <ins>receive</ins> the photos?</p><p class="why">Plain letters with the colour only in the line and the fill. The change no longer stands out from the sentence.</p></div>
+      </div>
+      <p class="note">With red-green colour blindness the two colours can look alike. The strike and the bold still show which word goes and which comes.</p>
+    </section>
+
+    <section id="card">
+      <h2>Card</h2>
+      <p>One card for every suggestion. From top to bottom: a dot in the underline's colour and a title, the sentence with the change in place, then a row of buttons with the main one first. Spelling adds "Add to dictionary". Two or more fixes in a sentence become "Correct the sentence". A change of spaces alone shows as <span class="g">␣</span>.</p>
+      <div class="well">
+        <div class="row">
+          <div><p class="label">Spelling</p><div class="g g-card">
+            <div class="g-head"><span class="g-dot"></span>Correct your spelling</div>
+            <p class="g-text">Did you <del>recieve</del> <ins>receive</ins> the photos?</p>
+            <div class="g-actions"><button class="g-btn main" type="button">Accept</button><button class="g-btn" type="button">Dismiss</button><button class="g-btn" type="button">Add to dictionary</button></div>
+          </div></div>
+          <div><p class="label">A word taken out</p><div class="g g-card">
+            <div class="g-head"><span class="g-dot"></span>Correct your grammar</div>
+            <p class="g-text">Can you send me the <del>the</del> link for the frame.io draft when…</p>
+            <div class="g-actions"><button class="g-btn main" type="button">Accept</button><button class="g-btn" type="button">Dismiss</button></div>
+          </div></div>
+          <div><p class="label">Several fixes in one sentence</p><div class="g g-card">
+            <div class="g-head"><span class="g-dot"></span>Correct the sentence</div>
+            <p class="g-text"><del>i</del> <ins>I</ins> went to <del>paris</del> <ins>Paris</ins> on <del>monday</del> <ins>Monday</ins> and it was great.</p>
+            <div class="g-actions"><button class="g-btn main" type="button">Correct the sentence</button><button class="g-btn" type="button">Dismiss</button></div>
+          </div></div>
+          <div><p class="label">Clearer wording</p><div class="g g-card advice">
+            <div class="g-head"><span class="g-dot"></span>Improve your text</div>
+            <p class="g-text">I think <del>it would maybe be better if we could try to</del> <ins>we should</ins> move the meeting to Thursday instead.</p>
+            <div class="g-actions"><button class="g-btn main" type="button">Accept</button><button class="g-btn" type="button">Dismiss</button></div>
+          </div></div>
+          <div><p class="label">Spacing</p><div class="g g-card">
+            <div class="g-head"><span class="g-dot"></span>Correct your spacing</div>
+            <p class="g-text">So yes<del>␣</del> was the answer.</p>
+            <div class="g-actions"><button class="g-btn main" type="button">Accept</button><button class="g-btn" type="button">Dismiss</button></div>
+          </div></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="button">
+      <h2>Button</h2>
+      <p>Every button is 32 high with 6 corners. The main button is solid ink. The others are outlined, and the outline gives way to a fill under the pointer. There's no pressed state: the click acts at once and the card closes.</p>
+      <div class="well">
+        <div class="row" style="align-items:center">
+          <div><p class="label">Main, at rest</p><button class="g g-btn main" type="button">Accept</button></div>
+          <div><p class="label">Main, pointer over</p><button class="g g-btn main is-hover" type="button">Accept</button></div>
+          <div><p class="label">Other, at rest</p><button class="g g-btn" type="button">Dismiss</button></div>
+          <div><p class="label">Other, pointer over</p><button class="g g-btn is-hover" type="button">Dismiss</button></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="dictionary">
+      <h2>Dictionary</h2>
+      <p>Opened from the menu. It's a borderless window with Gramly's own header and close cross, the card's surface, and the same buttons. It has a field to add a word and a list to remove one from. Escape and Ctrl/⌘-W close it.</p>
+      <div class="well">
+        <div class="g g-window">
+          <div class="g-window-head"><h4>Dictionary</h4><button class="g-icon" type="button" aria-label="Close"><svg><use href="#x"/></svg></button></div>
+          <p class="g-sub">Gramly never flags these words.</p>
+          <div class="g-add"><div class="g-field">Add a word</div><button class="g-btn" type="button">Add</button></div>
+          <ul class="g-words">
+            <li>Fieldtrip<button class="g-icon" type="button" aria-label="Remove Fieldtrip"><svg><use href="#x"/></svg></button></li>
+            <li>Gramly<button class="g-icon" type="button" aria-label="Remove Gramly"><svg><use href="#x"/></svg></button></li>
+            <li>Hyprland<button class="g-icon" type="button" aria-label="Remove Hyprland"><svg><use href="#x"/></svg></button></li>
+            <li>Wayland<button class="g-icon" type="button" aria-label="Remove Wayland"><svg><use href="#x"/></svg></button></li>
+          </ul>
+          <p class="g-count">4 words</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="files">
+      <h2>Files</h2>
+      <ul class="files-list">
+        <li><code>design/tokens.json</code>: every value on this page, for the code and for the Linux surface.</li>
+        <li><code>src/macos/theme.rs</code>: colours, corners and the font. Card, button and dictionary measures are in <code>overlay.rs</code> and <code>dictionary.rs</code>.</li>
+        <li><code>cargo test</code> fails when the code and <code>tokens.json</code> disagree, or when this page leaves out a colour. Change both together.</li>
+        <li><code>gramly preview</code>: draws every card and the dictionary to PNG in both appearances, from the app's own code. This page is a close copy; the previews are the real thing.</li>
+        <li><code>DESIGN.md</code>: the short version, next to the code.</li>
+      </ul>
+    </section>
+  </main>
+</div>
+
+<script>
+  (function () {
+    var root = document.documentElement;
+    function sync() {
+      document.querySelectorAll('.seg button[data-key]').forEach(function (b) {
+        b.setAttribute('aria-pressed', String(root.dataset[b.dataset.key] === b.dataset.val));
+      });
+    }
+    document.querySelectorAll('.seg button[data-key]').forEach(function (b) {
+      b.addEventListener('click', function () {
+        root.dataset[b.dataset.key] = b.dataset.val;
+        if (b.dataset.key === 'appearance') { try { localStorage.setItem('gramly-ink-appearance', b.dataset.val); } catch (e) {} }
+        sync();
+      });
+    });
+    sync();
+
+    function play() {
+      var card = document.getElementById('arrive');
+      card.classList.remove('arrive'); void card.offsetWidth; card.classList.add('arrive');
+      document.querySelectorAll('[data-glow]').forEach(function (w) {
+        w.classList.remove('play'); void w.offsetWidth; w.classList.add('play');
+      });
+    }
+    document.getElementById('replay').addEventListener('click', play);
+    var stage = document.getElementById('motion');
+    if ('IntersectionObserver' in window) {
+      new IntersectionObserver(function (entries) {
+        entries.forEach(function (e) { if (e.isIntersecting) play(); });
+      }, { threshold: .5 }).observe(stage);
+    }
+  })();
+</script>
+</body>
+</html>

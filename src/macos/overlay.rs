@@ -48,7 +48,7 @@ pub struct Mark {
     pub rect: CGRect,
     pub kind: Kind,
     pub highlighted: bool,
-    /// Just accepted: a grey glow and no underline.
+    /// Just accepted: a green glow and no underline.
     pub flash: bool,
 }
 
@@ -204,7 +204,7 @@ impl Overlay {
                 let fill = if mark.flash {
                     Some(theme::ACCEPTED)
                 } else if mark.highlighted {
-                    Some(with_alpha(color, 0.16))
+                    Some(with_alpha(color, HOVER_FILL))
                 } else {
                     None
                 };
@@ -215,7 +215,7 @@ impl Overlay {
                         CGSize::new(mark.rect.size.width + 2.0, mark.rect.size.height),
                     ));
                     layer.setBackgroundColor(Some(&theme::cg(fill)));
-                    layer.setCornerRadius(3.0);
+                    layer.setCornerRadius(theme::CORNER_INLINE);
                     root.addSublayer(&layer);
                 }
                 if mark.flash {
@@ -325,7 +325,7 @@ impl Overlay {
         self.card.setFrame_display(frame, true);
         // Settling towards its word: down onto a card below it, up onto
         // one above.
-        let from = if below { 3.0 } else { -3.0 };
+        let from = if below { RISE } else { -RISE };
         fade_in(&shade, from);
         fade_in(&card.view, from);
         self.shade.orderFrontRegardless();
@@ -378,9 +378,13 @@ impl Overlay {
     }
 }
 
-/// The card's fade: 140ms, moving the last 3pt (`from`, up positive)
-/// towards its word. Explicit, so the transactions that keep everything else
-/// still do not stop it.
+/// The card's one motion: it fades in over `FADE` seconds, moving its last
+/// `RISE` points towards its word.
+const FADE: f64 = 0.14;
+const RISE: f64 = 3.0;
+
+/// The card's fade, moving from `from` (up positive). Explicit, so the
+/// transactions that keep everything else still do not stop it.
 fn fade_in(view: &NSView, from: f64) {
     let Some(layer) = view.layer() else {
         return;
@@ -395,7 +399,7 @@ fn fade_in(view: &NSView, from: f64) {
         if path == "opacity" {
             unsafe { animation.setToValue(Some(&NSNumber::new_f64(1.0))) };
         }
-        animation.setDuration(0.14);
+        animation.setDuration(FADE);
         animation.setTimingFunction(Some(&ease));
         layer.addAnimation_forKey(&animation, Some(&NSString::from_str(path)));
     }
@@ -427,7 +431,7 @@ impl Row {
     }
 }
 
-/// Every button: 32 high, 8 corners, 12 at the sides.
+/// Every button: 32 high, 6 corners, 12 at the sides.
 const BUTTON_H: f64 = 32.0;
 const BUTTON_SIDE: f64 = 12.0;
 
@@ -488,7 +492,7 @@ fn button(
     };
     still(|| {
         if let Some(layer) = row.view.layer() {
-            layer.setCornerRadius(8.0);
+            layer.setCornerRadius(theme::CORNER_CONTROL);
             if line.is_some() {
                 layer.setBorderWidth(1.0);
             }
@@ -605,7 +609,12 @@ pub(crate) fn card(
         };
 
     let inner = WIDTH - PAD * 2.0;
-    let (sentence, sentence_h) = sentence_view(&snippet(text, &members), inner, p, mtm);
+    let gone = if fix.kind == Kind::Clarity {
+        p.gone_advice
+    } else {
+        p.gone
+    };
+    let (sentence, sentence_h) = sentence_view(&snippet(text, &members), inner, gone, p, mtm);
 
     // Buttons left to right, wrapping in the rare case they do not fit.
     let mut placed: Vec<(Row, usize)> = Vec::new();
@@ -633,7 +642,7 @@ pub(crate) fn card(
     still(|| {
         if let Some(layer) = view.layer() {
             layer.setBackgroundColor(Some(&theme::cg(p.surface)));
-            layer.setCornerRadius(12.0);
+            layer.setCornerRadius(theme::CORNER);
             // A hairline, not a border: half a point is one pixel on a
             // Retina screen.
             layer.setBorderWidth(0.5);
@@ -684,8 +693,16 @@ pub(crate) fn card(
 /// How far the shadow reaches past the card: left, right, top, bottom.
 pub(crate) const SHADE: (f64, f64, f64, f64) = (40.0, 40.0, 24.0, 64.0);
 
-/// The card's shadow: a tight one at its edge and a soft one below, drawn
-/// from paths so nothing else is painted.
+/// Behind a word whose card is open, its underline's colour at this alpha.
+const HOVER_FILL: f64 = 0.16;
+
+/// The card's two shadows as (inset, drop, blur, share of the palette's
+/// strength): a tight one at its edge and a soft one below. The soft one
+/// dropped 18 with a 22 blur, and the card floated like a bubble.
+const SHADOW_TIGHT: (f64, f64, f64, f32) = (0.0, 1.0, 2.0, 0.4);
+const SHADOW_SOFT: (f64, f64, f64, f32) = (12.0, 14.0, 18.0, 1.0);
+
+/// The card's shadow, drawn from paths so nothing else is painted.
 pub(crate) fn shade(size: CGSize, p: &Palette, mtm: MainThreadMarker) -> Retained<NSView> {
     let view = layer_view(
         CGRect::new(
@@ -698,14 +715,12 @@ pub(crate) fn shade(size: CGSize, p: &Palette, mtm: MainThreadMarker) -> Retaine
         mtm,
     );
     let card = CGRect::new(CGPoint::new(SHADE.0, SHADE.3), size);
-    // (inset, drop, blur, strength)
-    let tight = (0.0, 1.0, 2.0, p.shadow * 0.4);
-    let soft = (12.0, 18.0, 22.0, p.shadow);
     still(|| {
         let Some(root) = view.layer() else {
             return;
         };
-        for (inset, drop, blur, strength) in [tight, soft] {
+        for (inset, drop, blur, share) in [SHADOW_TIGHT, SHADOW_SOFT] {
+            let strength = p.shadow * share;
             let layer = CALayer::new();
             layer.setFrame(view.bounds());
             let shape = CGRect::new(
@@ -715,7 +730,9 @@ pub(crate) fn shade(size: CGSize, p: &Palette, mtm: MainThreadMarker) -> Retaine
                     card.size.height - inset * 2.0,
                 ),
             );
-            let path = unsafe { CGPath::with_rounded_rect(shape, 12.0, 12.0, std::ptr::null()) };
+            let path = unsafe {
+                CGPath::with_rounded_rect(shape, theme::CORNER, theme::CORNER, std::ptr::null())
+            };
             layer.setShadowPath(Some(&path));
             layer.setShadowColor(Some(&theme::cg(Rgba {
                 r: 0.0,
@@ -736,9 +753,9 @@ pub(crate) fn shade(size: CGSize, p: &Palette, mtm: MainThreadMarker) -> Retaine
 #[derive(Debug, Clone, PartialEq)]
 enum Bit {
     Same(String),
-    /// What goes, struck.
+    /// What goes, struck, in red (blue for clearer wording).
     Gone(String),
-    /// What comes in, on a fill.
+    /// What comes in, green on a green fill.
     New(String),
 }
 
@@ -899,10 +916,14 @@ const TEXT: f64 = 15.0;
 const PADDING: char = '\u{202F}';
 
 /// The sentence, laid out `width` wide, over the fills of its new words.
+/// Struck words take `gone`. Each word has its colour in one place: letters
+/// and line in red, or green letters on their fill. Red letters under a
+/// darker red line, or white letters under a red one, both read worse.
 /// Returns the view and its height.
 fn sentence_view(
     bits: &[Bit],
     width: f64,
+    gone: Rgba,
     p: &Palette,
     mtm: MainThreadMarker,
 ) -> (Retained<NSView>, f64) {
@@ -921,8 +942,8 @@ fn sentence_view(
     for bit in bits {
         let (shown, font, color, struck) = match bit {
             Bit::Same(s) => (s.clone(), &regular, p.text, false),
-            Bit::Gone(s) => (s.clone(), &regular, p.text2, true),
-            Bit::New(s) => (format!("{PADDING}{s}{PADDING}"), &bold, p.text, false),
+            Bit::Gone(s) => (s.clone(), &regular, gone, true),
+            Bit::New(s) => (format!("{PADDING}{s}{PADDING}"), &bold, p.new, false),
         };
         let start = text.length();
         text.appendAttributedString(&run(&shown, font, color, struck, raise, &style));
@@ -974,8 +995,8 @@ fn sentence_view(
                     CGPoint::new(rect.origin.x, height - middle - fill_h / 2.0),
                     CGSize::new(rect.size.width, fill_h),
                 ));
-                layer.setBackgroundColor(Some(&theme::cg(p.fill)));
-                layer.setCornerRadius(5.0);
+                layer.setBackgroundColor(Some(&theme::cg(p.new_fill)));
+                layer.setCornerRadius(theme::CORNER_INLINE);
                 root.addSublayer(&layer);
             }
         }
@@ -1032,6 +1053,45 @@ fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn measures_match_the_tokens() {
+        use crate::macos::theme::tokens::{load, num};
+        let t = load();
+        for (path, ours) in [
+            ("card.width", WIDTH),
+            ("card.padding", PAD),
+            ("card.under_title", UNDER_TITLE),
+            ("card.above_buttons", ABOVE_BUTTONS),
+            ("card.between_buttons", BETWEEN),
+            ("card.context_words", CONTEXT as f64),
+            ("button.height", BUTTON_H),
+            ("button.side", BUTTON_SIDE),
+            ("type.sentence.size", TEXT),
+            ("type.sentence.line", LINE),
+            ("underline.hover_fill", HOVER_FILL),
+            ("shadow.tight.inset", SHADOW_TIGHT.0),
+            ("shadow.tight.drop", SHADOW_TIGHT.1),
+            ("shadow.tight.blur", SHADOW_TIGHT.2),
+            ("shadow.tight.share", f64::from(SHADOW_TIGHT.3)),
+            ("shadow.soft.inset", SHADOW_SOFT.0),
+            ("shadow.soft.drop", SHADOW_SOFT.1),
+            ("shadow.soft.blur", SHADOW_SOFT.2),
+            ("shadow.soft.share", f64::from(SHADOW_SOFT.3)),
+            ("motion.card_fade_ms", FADE * 1000.0),
+            ("motion.card_rise", RISE),
+            (
+                "motion.accepted_ms",
+                crate::macos::app::FLASH.as_millis() as f64,
+            ),
+        ] {
+            let theirs = num(&t, path);
+            assert!(
+                (ours - theirs).abs() < 1e-6,
+                "{path}: {ours} here, {theirs} in tokens.json"
+            );
+        }
+    }
 
     fn fix(text: &str, gone: &str, replacement: &str) -> Fix {
         let byte = text.rfind(gone).unwrap();
