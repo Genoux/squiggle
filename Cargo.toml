@@ -5,7 +5,7 @@ members = [".", "crates/core"]
 
 [package]
 name = "gramly"
-version = "0.2.3"
+version = "0.2.4"
 edition = "2024"
 license = "MIT"
 description = "Grammar suggestions in whatever text field has focus"
