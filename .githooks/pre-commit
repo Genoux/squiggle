@@ -1,0 +1,9 @@
+#!/bin/sh
+# main only moves through pull requests. GitHub refuses a push to it; this
+# stops the commit before it is made, while it is still easy to move.
+# Enabled per clone: git config core.hooksPath .githooks
+branch=$(git symbolic-ref --short HEAD 2>/dev/null)
+if [ "$branch" = "main" ]; then
+  echo "main takes no commits: branch first (git switch -c feat/<name>) and open a pull request." >&2
+  exit 1
+fi
