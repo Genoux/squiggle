@@ -89,6 +89,10 @@ cargo run -- preview      # draw every card and the dictionary to target/preview
 ./sandbox                 # every release check, with a report; --ai, --models, --screen, --all
 ```
 
+main takes no direct commits: work on a branch and open a pull request,
+which merges once CI passes. Once per clone, `git config core.hooksPath
+.githooks` makes git refuse a commit on main before GitHub refuses the push.
+
 See [AGENTS.md](AGENTS.md) for why things are built the way they are,
 [DESIGN.md](DESIGN.md) for how the card and the dictionary look (the full
 design system is `design/index.html`, its values `design/tokens.json`), and

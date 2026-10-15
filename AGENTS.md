@@ -418,7 +418,14 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
 - The git history carries no agent attribution: no `Co-authored-by:` trailers,
   no tool signatures in messages, no agent branches. Agent tooling directories
   stay untracked. Same rule as Flow.
+- main only moves through pull requests. GitHub refuses a direct push to
+  it, admins included (branch protection), and a pull request merges only
+  once CI's `macos` and `linux` jobs pass on it, up to date with main.
+  Merged by rebase: history stays linear and each commit message stays the
+  record. Work goes on a branch named for it (`feat/…`, `fix/…`,
+  `chore/…`). `.githooks/pre-commit` refuses a commit on main locally
+  (`git config core.hooksPath .githooks`, once per clone).
 - Versions: root and `crates/core` move together, and the release workflow
   refuses a tag that disagrees with either. Bump with a `chore: bump version
-  to X.Y.Z` commit, then tag `vX.Y.Z`. Releases are drafts until someone has
-  run the build.
+  to X.Y.Z` commit in the pull request, then tag `vX.Y.Z` on main once it
+  has merged. Releases are drafts until someone has run the build.
