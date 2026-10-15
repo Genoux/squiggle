@@ -153,6 +153,13 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
   model's fix was dropped and the word stayed underlined by nothing.
   A bare domain may change case only, as Grammarly offers "Frame.io" for
   "frame.io"; a link, address or path never, since case can break one.
+- A fix that changes nothing the writer can see is dropped (`protect::keep`):
+  one that only removes or swaps characters that draw nothing (zero-width
+  spaces and joiners, a byte-order mark, direction marks, controls), and any
+  that takes out an inline object (U+FFFC). Editors keep such characters
+  beside blocks and chips, and the model drops them as strays. In Coda a
+  card offered "Correct your punctuation" with no change in its sentence,
+  underlined on the block's drag handle.
 - The dictionary binds both passes. Harper is given the words; the model
   is not, and with AI on its answer is the whole answer, so a word added
   from a card was corrected again on the next pause. Every fix that would
