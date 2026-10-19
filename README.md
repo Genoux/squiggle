@@ -17,7 +17,7 @@ the subtler mistakes go to Gemini 3.5 Flash-Lite through your own
 | Access | Accessibility, granted once in System Settings |
 | Account | An OpenRouter key, only for AI suggestions |
 
-Linux (Wayland, Hyprland) is next; the engine already builds and is tested there.
+Linux is supported on Hyprland only; see [Linux](#linux).
 
 ## Install
 
@@ -42,6 +42,41 @@ checks only.
 Updating is `git pull && ./packaging/install.sh`. Removing it is
 `./packaging/uninstall.sh`, which leaves your settings and dictionary alone.
 
+## Linux
+
+Hyprland on Wayland, and only Hyprland: Wayland tells an app nothing about
+where other windows or the pointer are, and Hyprland's socket does. On
+another compositor Gramly refuses to install rather than underline nothing.
+
+| | |
+|---|---|
+| Session | Hyprland, with a tray that speaks StatusNotifierItem (Waybar, Quickshell, ...) |
+| Build | Rust, GTK 4 and `gtk4-layer-shell` (`pacman -S gtk4 gtk4-layer-shell`) |
+
+```bash
+git clone https://github.com/Genoux/gramly
+cd gramly && ./packaging/install.sh
+```
+
+That installs `~/.local/bin/gramly` and a systemd user unit that starts with
+your graphical session; nothing needs `sudo`. The unit relies on the session
+having `WAYLAND_DISPLAY` and `HYPRLAND_INSTANCE_SIGNATURE` in systemd's user
+environment (uwsm does that); the installer checks and tells you if not.
+Removing it is `./packaging/uninstall.sh`.
+
+**Chrome and Electron apps need a flag.** They build no accessibility tree
+unless started with `--force-renderer-accessibility`, so without it Gramly
+sees no text field in them. The installer offers to add it to
+`~/.config/chrome-flags.conf` and `~/.config/electron-flags.conf`, which
+Chrome and the Arch `electron` packages read, and restart the app afterwards.
+Slack, ChatGPT, Orca and other apps that bundle their own Electron read no
+flag file; add the flag to the `Exec` line of a copy of their `.desktop`
+file in `~/.local/share/applications`.
+
+`gramly doctor` shows what Gramly can see in the field you click into, and
+the tray icon has the same menu as the Mac's, except that **Personal
+dictionary…** opens `dictionary.txt` in your text editor.
+
 ## Daily use
 
 | | |
@@ -49,7 +84,7 @@ Updating is `git pull && ./packaging/install.sh`. Removing it is
 | Red underline | A mistake - spelling, grammar, a wrong word |
 | Blue underline | Correct, but could read better |
 | Hover an underline | Your sentence with the fix in place, then **Accept** / **Dismiss** / **Add to dictionary** |
-| Menu bar icon | Pause for an hour, turn off in the app in front, AI on/off, key, spelling, personal dictionary |
+| Menu bar icon (tray icon on Linux) | Pause for an hour, turn off in the app in front, AI on/off, key, spelling, personal dictionary |
 | `gramly doctor` | What Gramly can see in the field you click into |
 | `gramly check < file.txt` | The same suggestions, printed |
 | `gramly check --improve < file.txt` | The clearer wording the app proposes, printed |
