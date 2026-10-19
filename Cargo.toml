@@ -13,6 +13,7 @@ description = "Grammar suggestions in whatever text field has focus"
 [dependencies]
 anyhow = "1"
 gramly-core = { path = "crates/core" }
+libc = "0.2"
 serde_json = "1"
 
 [profile.dev]
@@ -37,3 +38,11 @@ objc2-quartz-core = "0.3.2"
 # completion block its JavaScript answers through.
 objc2-web-kit = "0.3.2"
 block2 = "0.6.2"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+atspi-proxies = "0.14"
+zbus = "5"
+gtk4 = "0.11"
+gtk4-layer-shell = "0.8"
+wl-clipboard-rs = "0.9"
+ksni = { version = "0.3", default-features = false, features = ["async-io", "blocking"] }

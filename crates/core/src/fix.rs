@@ -4,7 +4,7 @@
 //! model's edits are located in. The platforms do not speak chars: macOS
 //! Accessibility counts UTF-16 code units, AT-SPI counts chars, and an emoji
 //! earlier in the field moves every underline after it by one if the two are
-//! mixed up. [`Fix::utf16`] is the only conversion, so there is one place to be
+//! mixed up. [`utf16_range`] is the only conversion, so there is one place to be
 //! wrong instead of one per backend.
 
 use serde::{Deserialize, Serialize};
@@ -53,18 +53,7 @@ impl Fix {
     /// `(location, length)` in UTF-16 code units, which is what macOS
     /// `AXBoundsForRange` and `AXSelectedTextRange` take.
     pub fn utf16(&self, text: &str) -> (usize, usize) {
-        let mut location = 0;
-        let mut length = 0;
-        for (index, c) in text.chars().enumerate() {
-            if index < self.start {
-                location += c.len_utf16();
-            } else if index < self.end {
-                length += c.len_utf16();
-            } else {
-                break;
-            }
-        }
-        (location, length)
+        utf16_range(text, self.start, self.end)
     }
 
     fn overlaps(&self, other: &Fix) -> bool {
@@ -75,6 +64,23 @@ impl Fix {
         }
         self.start < other.end && other.start < self.end
     }
+}
+
+/// The char range `start..end` of `text` as `(location, length)` in UTF-16
+/// code units.
+pub fn utf16_range(text: &str, start: usize, end: usize) -> (usize, usize) {
+    let mut location = 0;
+    let mut length = 0;
+    for (index, c) in text.chars().enumerate() {
+        if index < start {
+            location += c.len_utf16();
+        } else if index < end {
+            length += c.len_utf16();
+        } else {
+            break;
+        }
+    }
+    (location, length)
 }
 
 /// The local pass and the model's pass as one list, ordered by position.
@@ -216,6 +222,14 @@ mod tests {
         let typo = fix(2, 5, "the", Source::Local);
         assert_eq!(typo.original(text), "teh");
         assert_eq!(typo.utf16(text), (3, 3));
+    }
+
+    #[test]
+    fn utf16_range_counts_chars_up_to_each_end() {
+        assert_eq!(utf16_range("😀 teh cat", 2, 5), (3, 3));
+        assert_eq!(utf16_range("a😀b", 1, 2), (1, 2));
+        assert_eq!(utf16_range("a😀b", 3, 3), (4, 0));
+        assert_eq!(utf16_range("ab", 1, 9), (1, 1));
     }
 
     #[test]

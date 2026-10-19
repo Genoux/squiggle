@@ -14,9 +14,10 @@
 //! drew each underline sliding in from the panel's corner. The one motion is
 //! deliberate: the card fades in (`fade_in`), with an explicit animation.
 
+use crate::macos::primary_height;
 use crate::macos::theme::{self, Palette, Rgba, Weight};
-use gramly_core::diff::{Piece, pieces};
-use gramly_core::{Fix, Kind, Source};
+use crate::surface::{self, Action, Bit, Card, Mark, Point, Rect, place_card};
+use gramly_core::Kind;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, Bool, Sel};
 use objc2::{AnyThread, MainThreadMarker, MainThreadOnly, sel};
@@ -42,52 +43,40 @@ use std::cell::RefCell;
 use std::ptr::NonNull;
 use std::rc::Rc;
 
-/// One underline, already in Cocoa screen coordinates.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Mark {
-    pub rect: CGRect,
-    pub kind: Kind,
-    pub highlighted: bool,
-    /// Just accepted: a green glow and no underline.
-    pub flash: bool,
-}
-
 /// Accessibility reports rectangles from the top-left of the primary display
 /// with y growing down; Cocoa places windows from its bottom-left with y
-/// growing up. Every rectangle crosses this once, here.
-pub fn to_cocoa(rect: CGRect, mtm: MainThreadMarker) -> CGRect {
-    let screens = NSScreen::screens(mtm);
-    let height = screens
-        .firstObject()
-        .map(|primary| primary.frame().size.height)
-        .unwrap_or(0.0);
+/// growing up. Every rectangle crosses this once, here, and the flip is its
+/// own inverse.
+fn to_cocoa(rect: Rect, mtm: MainThreadMarker) -> CGRect {
     CGRect::new(
-        CGPoint::new(rect.origin.x, height - rect.origin.y - rect.size.height),
-        rect.size,
+        CGPoint::new(rect.x, primary_height(mtm) - rect.y - rect.h),
+        CGSize::new(rect.w, rect.h),
     )
 }
 
-/// The usable part (no menu bar, no Dock) of the screen a rectangle is on,
-/// in Cocoa coordinates; the main screen's when it is on none.
-fn screen_around(rect: CGRect, mtm: MainThreadMarker) -> CGRect {
-    let middle = CGPoint::new(
-        rect.origin.x + rect.size.width / 2.0,
-        rect.origin.y + rect.size.height / 2.0,
-    );
+fn from_cocoa(rect: CGRect, mtm: MainThreadMarker) -> Rect {
+    Rect {
+        x: rect.origin.x,
+        y: primary_height(mtm) - rect.origin.y - rect.size.height,
+        w: rect.size.width,
+        h: rect.size.height,
+    }
+}
+
+/// The usable part (no menu bar, no Dock) of the screen a rectangle is on;
+/// the main screen's when it is on none.
+fn screen_around(rect: Rect, mtm: MainThreadMarker) -> Rect {
+    let middle = Point {
+        x: rect.x + rect.w / 2.0,
+        y: rect.y + rect.h / 2.0,
+    };
     let screens = NSScreen::screens(mtm);
     screens
         .iter()
-        .find(|screen| contains(screen.frame(), middle))
+        .find(|screen| from_cocoa(screen.frame(), mtm).contains(middle))
         .or_else(|| NSScreen::mainScreen(mtm))
-        .map(|screen| screen.visibleFrame())
+        .map(|screen| from_cocoa(screen.visibleFrame(), mtm))
         .unwrap_or(rect)
-}
-
-pub fn contains(rect: CGRect, point: CGPoint) -> bool {
-    point.x >= rect.origin.x
-        && point.x <= rect.origin.x + rect.size.width
-        && point.y >= rect.origin.y
-        && point.y <= rect.origin.y + rect.size.height
 }
 
 fn still<T>(change: impl FnOnce() -> T) -> T {
@@ -147,6 +136,10 @@ fn with_alpha(c: Rgba, a: f64) -> Rgba {
 
 pub struct Overlay {
     mtm: MainThreadMarker,
+    /// What the card's buttons send their clicks to. The controller owns the
+    /// engine that owns this, so the two keep each other alive: one of each
+    /// exists for the life of the process.
+    target: Retained<AnyObject>,
     marks_panel: Retained<NSPanel>,
     drawn: Vec<Mark>,
     card: Retained<NSPanel>,
@@ -154,37 +147,38 @@ pub struct Overlay {
     /// the card's panel, the shadow's pixels would take clicks meant for the
     /// text below the card.
     shade: Retained<NSPanel>,
-    /// The fix the card is showing.
-    pub card_for: Option<usize>,
     /// The card's buttons, and which one the pointer is over.
     rows: Vec<Row>,
     lit: Option<usize>,
 }
 
 impl Overlay {
-    pub fn new(mtm: MainThreadMarker) -> Self {
+    pub fn new(mtm: MainThreadMarker, target: Retained<AnyObject>) -> Self {
         Self {
             mtm,
+            target,
             marks_panel: panel(mtm, false, NSStatusWindowLevel),
             drawn: Vec::new(),
             // One level above the underlines, so a line from the text under
             // the card never crosses it.
             card: panel(mtm, true, NSStatusWindowLevel + 1),
             shade: panel(mtm, false, NSStatusWindowLevel),
-            card_for: None,
             rows: Vec::new(),
             lit: None,
         }
     }
+}
 
+impl surface::Overlay for Overlay {
     /// Redraws the underlines only when they changed: rebuilding layers on
     /// every tick would cost a compositor frame twenty times a second for
     /// nothing.
-    pub fn marks(&mut self, area: CGRect, marks: Vec<Mark>) {
+    fn marks(&mut self, area: Rect, marks: Vec<Mark>) {
         if marks.is_empty() {
             self.hide_marks();
             return;
         }
+        let area = to_cocoa(area, self.mtm);
         if self.drawn == marks && self.marks_panel.isVisible() && self.marks_panel.frame() == area {
             return;
         }
@@ -198,8 +192,9 @@ impl Overlay {
         still(|| {
             unsafe { root.setSublayers(None) };
             for mark in &marks {
-                let x = mark.rect.origin.x - area.origin.x;
-                let y = mark.rect.origin.y - area.origin.y;
+                let rect = to_cocoa(mark.rect, self.mtm);
+                let x = rect.origin.x - area.origin.x;
+                let y = rect.origin.y - area.origin.y;
                 let color = theme::kind(mark.kind);
                 let fill = if mark.flash {
                     Some(theme::ACCEPTED)
@@ -212,7 +207,7 @@ impl Overlay {
                     let layer = CALayer::new();
                     layer.setFrame(CGRect::new(
                         CGPoint::new(x - 1.0, y),
-                        CGSize::new(mark.rect.size.width + 2.0, mark.rect.size.height),
+                        CGSize::new(rect.size.width + 2.0, rect.size.height),
                     ));
                     layer.setBackgroundColor(Some(&theme::cg(fill)));
                     layer.setCornerRadius(theme::CORNER_INLINE);
@@ -224,7 +219,7 @@ impl Overlay {
                 let line = CALayer::new();
                 line.setFrame(CGRect::new(
                     CGPoint::new(x, y - 1.0),
-                    CGSize::new(mark.rect.size.width, 2.0),
+                    CGSize::new(rect.size.width, 2.0),
                 ));
                 line.setBackgroundColor(Some(&theme::cg(color)));
                 line.setCornerRadius(1.0);
@@ -235,112 +230,85 @@ impl Overlay {
         self.marks_panel.orderFrontRegardless();
     }
 
-    pub fn hide_marks(&mut self) {
+    fn hide_marks(&mut self) {
         if self.marks_panel.isVisible() {
             self.marks_panel.orderOut(None);
         }
         self.drawn.clear();
     }
 
-    /// The card's buttons as (action, frame on screen in Cocoa coordinates),
-    /// for `GRAMLY_STATE`.
-    pub fn card_rows(&self) -> Vec<(String, CGRect)> {
+    fn card_rows(&self) -> Vec<(Action, Rect)> {
         if !self.card.isVisible() {
             return Vec::new();
         }
         let origin = self.card.frame().origin;
         self.rows
             .iter()
-            .map(|row| {
+            .filter_map(|row| {
                 let f = row.view.frame();
-                (
-                    row.action.name().to_string_lossy().into_owned(),
-                    CGRect::new(
-                        CGPoint::new(origin.x + f.origin.x, origin.y + f.origin.y),
-                        f.size,
-                    ),
-                )
+                let on_screen = CGRect::new(
+                    CGPoint::new(origin.x + f.origin.x, origin.y + f.origin.y),
+                    f.size,
+                );
+                row.action
+                    .map(|action| (action, from_cocoa(on_screen, self.mtm)))
             })
             .collect()
     }
 
-    pub fn card_frame(&self) -> Option<CGRect> {
-        self.card.isVisible().then(|| self.card.frame())
+    fn card_frame(&self) -> Option<Rect> {
+        self.card
+            .isVisible()
+            .then(|| from_cocoa(self.card.frame(), self.mtm))
     }
 
-    /// The card for the hovered suggestion: its sentence with the change in
-    /// place, then its buttons. One fix or several, a correction or clearer
-    /// wording, the layout is the same; only the title and the buttons
-    /// change.
-    ///
-    /// `group` is every fix in the hovered fix's sentence, by index, in order.
-    pub fn show_card(
-        &mut self,
-        index: usize,
-        group: &[(usize, Fix)],
-        text: &str,
-        word: CGRect,
-        target: &AnyObject,
-    ) {
-        if self.card_for == Some(index) && self.card.isVisible() {
-            return;
-        }
+    fn show_card(&mut self, index: usize, content: &Card, word: Rect) {
         let palette = theme::palette(self.mtm);
-        let Some(card) = card(index, group, text, target, palette, self.mtm) else {
-            return;
-        };
-        self.rows = card.rows;
+        let built = build(index, content, &self.target, palette, self.mtm);
+        self.rows = built.rows;
         self.lit = None;
-        let size = card.view.frame().size;
-        self.card.setContentView(Some(&card.view));
+        let size = built.view.frame().size;
+        self.card.setContentView(Some(&built.view));
 
-        // Close under the word: the less there is to cross, the less there is
-        // to fall into. Shifted left so the card's text starts near the word.
-        let gap = 6.0;
-        let mut origin = CGPoint::new(word.origin.x - PAD, word.origin.y - gap - size.height);
-        // Kept on the word's screen: a word near the right edge of a Slack
-        // window put the sentence card half off it. Shifted sideways rather
-        // than flipped, so it stays close to the word; above the word only
-        // when there is no room below.
-        const MARGIN: f64 = 8.0;
         let area = screen_around(word, self.mtm);
-        let (low, high) = (area.origin.y, area.origin.y + area.size.height);
-        let below = origin.y >= low + MARGIN;
-        if !below {
-            origin.y = (word.origin.y + word.size.height + gap).min(high - size.height - MARGIN);
-        }
-        let right = area.origin.x + area.size.width - size.width - MARGIN;
-        origin.x = origin.x.min(right).max(area.origin.x + MARGIN);
-        let frame = CGRect::new(origin, size);
-
+        let origin = place_card(word, (size.width, size.height), area);
+        let frame = Rect {
+            x: origin.x,
+            y: origin.y,
+            w: size.width,
+            h: size.height,
+        };
         let shade = shade(size, palette, self.mtm);
+        let cocoa = to_cocoa(frame, self.mtm);
         self.shade.setContentView(Some(&shade));
         self.shade.setFrame_display(
             CGRect::new(
-                CGPoint::new(origin.x - SHADE.0, origin.y - SHADE.3),
+                CGPoint::new(cocoa.origin.x - SHADE.0, cocoa.origin.y - SHADE.3),
                 shade.frame().size,
             ),
             true,
         );
-        self.card.setFrame_display(frame, true);
+        self.card.setFrame_display(cocoa, true);
         // Settling towards its word: down onto a card below it, up onto
         // one above.
-        let from = if below { RISE } else { -RISE };
+        let from = if frame.y >= word.y + word.h {
+            RISE
+        } else {
+            -RISE
+        };
         fade_in(&shade, from);
-        fade_in(&card.view, from);
+        fade_in(&built.view, from);
         self.shade.orderFrontRegardless();
         self.card.orderFrontRegardless();
-        self.card_for = Some(index);
     }
 
-    pub fn hide_card(&mut self) {
+    fn hide_card(&mut self) {
         if self.card.isVisible() {
             self.card.orderOut(None);
         }
         if self.shade.isVisible() {
             self.shade.orderOut(None);
         }
-        self.card_for = None;
         self.rows.clear();
         self.lit = None;
     }
@@ -350,16 +318,19 @@ impl Overlay {
     /// events of its own. The fade is short - long enough to read as a
     /// response, short enough that sweeping across the buttons does not
     /// trail.
-    pub fn hover(&mut self, mouse: CGPoint) {
+    fn hover(&mut self, pointer: Point) {
         if !self.card.isVisible() {
             return;
         }
         let origin = self.card.frame().origin;
-        let at = CGPoint::new(mouse.x - origin.x, mouse.y - origin.y);
+        let at = Point {
+            x: pointer.x - origin.x,
+            y: primary_height(self.mtm) - pointer.y - origin.y,
+        };
         let now = self
             .rows
             .iter()
-            .position(|row| contains(row.view.frame(), at));
+            .position(|row| Rect::from(row.view.frame()).contains(at));
         if now == self.lit {
             return;
         }
@@ -370,11 +341,6 @@ impl Overlay {
         }
         CATransaction::commit();
         self.lit = now;
-    }
-
-    pub fn hide_all(&mut self) {
-        self.hide_marks();
-        self.hide_card();
     }
 }
 
@@ -414,8 +380,9 @@ struct Row {
     hover: Rgba,
     /// The outline at rest; it gives way to the fill under the pointer.
     line: Option<Rgba>,
-    /// What clicking it does ("accept:", "dismiss:"), for `GRAMLY_STATE`.
-    action: Sel,
+    /// What clicking it does, for `GRAMLY_STATE`; none for a button of
+    /// another window.
+    action: Option<Action>,
 }
 
 impl Row {
@@ -456,7 +423,8 @@ fn button(
     primary: bool,
     x: f64,
     y: f64,
-    action: Sel,
+    selector: Sel,
+    action: Option<Action>,
     tag: isize,
     target: &AnyObject,
     p: &Palette,
@@ -503,7 +471,7 @@ fn button(
         NSButton::buttonWithTitle_target_action(
             &NSString::from_str(""),
             Some(target),
-            Some(action),
+            Some(selector),
             mtm,
         )
     };
@@ -520,35 +488,23 @@ fn button(
 pub(crate) fn plain_button(
     words: &str,
     primary: bool,
-    action: Sel,
+    selector: Sel,
     target: &AnyObject,
     p: &Palette,
     mtm: MainThreadMarker,
 ) -> Retained<NSView> {
-    button(words, primary, 0.0, 0.0, action, 0, target, p, mtm).view
+    button(words, primary, 0.0, 0.0, selector, None, 0, target, p, mtm).view
 }
 
-/// The title. The model's titles are written for this; Harper's messages are
-/// written for a list ("Did you mean to spell recieve this way?") and read
-/// oddly as a title, so local fixes get a plain one.
-fn title(fix: &Fix, text: &str) -> String {
-    let original = fix.original(text);
-    // A doubled space's card: the change is invisible, the title says it.
-    if !original.is_empty()
-        && original.chars().all(char::is_whitespace)
-        && fix.replacement.chars().all(char::is_whitespace)
-    {
-        return "Correct your spacing".into();
+/// What a button's click is sent to, in the controller.
+fn selector(action: Action) -> Sel {
+    match action {
+        Action::Accept => sel!(accept:),
+        Action::Dismiss => sel!(dismiss:),
+        Action::Learn => sel!(learn:),
+        Action::AcceptSentence => sel!(acceptSentence:),
+        Action::DismissSentence => sel!(dismissSentence:),
     }
-    if fix.source == Source::Ai && !fix.message.is_empty() {
-        return fix.message.clone();
-    }
-    match fix.kind {
-        Kind::Spelling => "Correct your spelling",
-        Kind::Correctness => "Correct your grammar",
-        Kind::Clarity => gramly_core::improve::TITLE,
-    }
-    .to_string()
 }
 
 /// Space around the card's content.
@@ -563,65 +519,46 @@ const BETWEEN: f64 = 8.0;
 /// The title's line.
 const TITLE_H: f64 = 18.0;
 
-pub(crate) struct Card {
+pub(crate) struct Built {
     pub view: Retained<NSView>,
     rows: Vec<Row>,
 }
 
-/// Builds the card for the fix at `index`; None if it is not in `group`.
-pub(crate) fn card(
+/// Builds the card for the fix at `index`.
+pub(crate) fn build(
     index: usize,
-    group: &[(usize, Fix)],
-    text: &str,
+    content: &Card,
     target: &AnyObject,
     p: &Palette,
     mtm: MainThreadMarker,
-) -> Option<Card> {
-    let (_, fix) = group.iter().find(|(i, _)| *i == index)?;
+) -> Built {
     let tag = index as isize;
-    let accept = ("Accept", sel!(accept:));
-    let dismiss = ("Dismiss", sel!(dismiss:));
-    // Clarity first: its card is never part of "Correct the sentence".
-    let (heading, dot, members, actions): (String, Rgba, Vec<&Fix>, Vec<(&str, Sel)>) =
-        if fix.kind == Kind::Clarity {
-            (
-                gramly_core::improve::TITLE.into(),
-                theme::ADVICE,
-                vec![fix],
-                vec![accept, dismiss],
-            )
-        } else if group.len() > 1 {
-            (
-                "Correct the sentence".into(),
-                theme::MISTAKE,
-                group.iter().map(|(_, f)| f).collect(),
-                vec![
-                    ("Correct the sentence", sel!(acceptSentence:)),
-                    ("Dismiss", sel!(dismissSentence:)),
-                ],
-            )
-        } else {
-            let mut actions = vec![accept, dismiss];
-            if fix.kind == Kind::Spelling {
-                actions.push(("Add to dictionary", sel!(learn:)));
-            }
-            (title(fix, text), theme::kind(fix.kind), vec![fix], actions)
-        };
-
+    let dot = theme::kind(content.kind);
     let inner = WIDTH - PAD * 2.0;
-    let gone = if fix.kind == Kind::Clarity {
+    let gone = if content.kind == Kind::Clarity {
         p.gone_advice
     } else {
         p.gone
     };
-    let (sentence, sentence_h) = sentence_view(&snippet(text, &members), inner, gone, p, mtm);
+    let (sentence, sentence_h) = sentence_view(&content.bits, inner, gone, p, mtm);
 
     // Buttons left to right, wrapping in the rare case they do not fit.
     let mut placed: Vec<(Row, usize)> = Vec::new();
     let mut line = 0;
     let mut x = PAD;
-    for (i, (words, action)) in actions.iter().enumerate() {
-        let row = button(words, i == 0, 0.0, 0.0, *action, tag, target, p, mtm);
+    for (i, &action) in content.actions.iter().enumerate() {
+        let row = button(
+            action.label(),
+            i == 0,
+            0.0,
+            0.0,
+            selector(action),
+            Some(action),
+            tag,
+            target,
+            p,
+            mtm,
+        );
         let w = row.view.frame().size.width;
         if x > PAD && x + w > WIDTH - PAD {
             line += 1;
@@ -665,7 +602,7 @@ pub(crate) fn card(
         }
     });
     view.addSubview(&marker);
-    let heading = label(&heading, 13.0, Weight::Medium, p.text2, mtm);
+    let heading = label(&content.title, 13.0, Weight::Medium, p.text2, mtm);
     let heading_h = heading.fittingSize().height;
     heading.setFrame(CGRect::new(
         CGPoint::new(
@@ -687,7 +624,7 @@ pub(crate) fn card(
         view.addSubview(&row.view);
         rows.push(row);
     }
-    Some(Card { view, rows })
+    Built { view, rows }
 }
 
 /// How far the shadow reaches past the card: left, right, top, bottom.
@@ -747,165 +684,6 @@ pub(crate) fn shade(size: CGSize, p: &Palette, mtm: MainThreadMarker) -> Retaine
         }
     });
     view
-}
-
-/// A piece of the card's sentence.
-#[derive(Debug, Clone, PartialEq)]
-enum Bit {
-    Same(String),
-    /// What goes, struck, in red (blue for clearer wording).
-    Gone(String),
-    /// What comes in, green on a green fill.
-    New(String),
-}
-
-/// Words of context kept on each side of the change.
-const CONTEXT: usize = 6;
-/// A space that is the whole change, shown so the card is never blank.
-const SPACE: &str = "\u{2423}";
-
-/// The sentence the fixes are in, with each change in place: the struck
-/// original and what replaces it. Cut to `CONTEXT` words either side, so a
-/// long sentence does not make a long card.
-///
-/// It replaced a lone replacement word. Out of its sentence, "it's" did not
-/// say why, and a removal had to be shown as what was left ("me the" for
-/// "send me the the link").
-fn snippet(text: &str, fixes: &[&Fix]) -> Vec<Bit> {
-    let chars: Vec<char> = text.chars().collect();
-    let mut fixes: Vec<&Fix> = fixes
-        .iter()
-        .copied()
-        .filter(|f| f.start <= f.end && f.end <= chars.len())
-        .collect();
-    fixes.sort_by_key(|f| f.start);
-    let Some(first) = fixes.first().map(|f| f.start) else {
-        return Vec::new();
-    };
-    let last = fixes.iter().map(|f| f.end).max().unwrap_or(first);
-    let (from, to) = gramly_core::sentence(text, first);
-    let (from, to) = (from.min(first), to.max(last).min(chars.len()));
-
-    let mut out = vec![Bit::Same(lead(&chars[from..first]))];
-    let mut cursor = first;
-    for fix in fixes {
-        if fix.start < cursor {
-            continue;
-        }
-        out.push(Bit::Same(chars[cursor..fix.start].iter().collect()));
-        let original: String = chars[fix.start..fix.end].iter().collect();
-        for piece in bridged(pieces(&original, &fix.replacement)) {
-            match piece {
-                Piece::Same(same) => out.push(Bit::Same(same)),
-                Piece::Changed { was, now } => change(&mut out, &was, &now),
-            }
-        }
-        cursor = fix.end;
-    }
-    out.push(Bit::Same(trail(&chars[cursor..to.max(cursor)])));
-
-    // Merged and flattened: a sentence on a card is one line of thought.
-    let mut tidy: Vec<Bit> = Vec::new();
-    for bit in out {
-        match (tidy.last_mut(), bit) {
-            (_, Bit::Same(s)) if s.is_empty() => {}
-            (Some(Bit::Same(prev)), Bit::Same(s)) => prev.push_str(&s.replace('\n', " ")),
-            (_, Bit::Same(s)) => tidy.push(Bit::Same(s.replace('\n', " "))),
-            (_, other) => tidy.push(other),
-        }
-    }
-    tidy
-}
-
-/// Two changes with one word kept between them, as one change. A rewrite
-/// shown word by word left "we" standing alone between two struck phrases
-/// ("~~it would maybe be better if~~ we ~~could try to~~ should"), which
-/// reads worse than the phrase struck and the new one beside it.
-fn bridged(pieces: Vec<Piece>) -> Vec<Piece> {
-    let mut out: Vec<Piece> = Vec::new();
-    for piece in pieces {
-        if let Piece::Changed { was, now } = &piece
-            && let [.., Piece::Changed { .. }, Piece::Same(kept)] = out.as_slice()
-            && !kept.trim().is_empty()
-            && !kept.trim().contains(char::is_whitespace)
-        {
-            let kept = kept.clone();
-            out.pop();
-            if let Some(Piece::Changed { was: w, now: n }) = out.last_mut() {
-                w.push_str(&kept);
-                w.push_str(was);
-                n.push_str(&kept);
-                n.push_str(now);
-                continue;
-            }
-        }
-        out.push(piece);
-    }
-    out
-}
-
-/// One changed stretch as bits. Spaces around a word stay plain text; a
-/// change of spaces alone is shown with `SPACE`.
-fn change(out: &mut Vec<Bit>, was: &str, now: &str) {
-    let blank = |s: &str| s.trim().is_empty();
-    if blank(was) && blank(now) {
-        let (gone, came) = (was.chars().count(), now.chars().count());
-        if gone > came {
-            // Spaced either side, so the mark does not cling to a word.
-            out.push(Bit::Same(now.into()));
-            out.push(Bit::Gone(SPACE.repeat(gone - came)));
-            out.push(Bit::Same(" ".into()));
-        } else {
-            out.push(Bit::Same(was.into()));
-            out.push(Bit::New(SPACE.repeat(came - gone)));
-        }
-        return;
-    }
-    let edges = |s: &str| {
-        let start = &s[..s.len() - s.trim_start().len()];
-        let end = &s[s.trim_end().len()..];
-        (start.to_string(), end.to_string())
-    };
-    // The spaces the sentence ends up with.
-    let (lead, tail) = if blank(now) { edges(was) } else { edges(now) };
-    out.push(Bit::Same(lead));
-    if !blank(was) {
-        out.push(Bit::Gone(was.trim().into()));
-    }
-    if !blank(now) {
-        if !blank(was) {
-            out.push(Bit::Same(" ".into()));
-        }
-        out.push(Bit::New(now.trim().into()));
-    }
-    out.push(Bit::Same(tail));
-}
-
-fn word_starts(chars: &[char]) -> Vec<usize> {
-    (0..chars.len())
-        .filter(|&i| !chars[i].is_whitespace() && (i == 0 || chars[i - 1].is_whitespace()))
-        .collect()
-}
-
-/// The last `CONTEXT` words before the change.
-fn lead(chars: &[char]) -> String {
-    let starts = word_starts(chars);
-    if starts.len() <= CONTEXT {
-        return chars.iter().collect();
-    }
-    let cut = starts[starts.len() - CONTEXT];
-    format!("…{}", chars[cut..].iter().collect::<String>())
-}
-
-/// The first `CONTEXT` words after the change.
-fn trail(chars: &[char]) -> String {
-    let starts = word_starts(chars);
-    if starts.len() <= CONTEXT {
-        return chars.iter().collect();
-    }
-    let cut = starts[CONTEXT];
-    let kept: String = chars[..cut].iter().collect();
-    format!("{}…", kept.trim_end())
 }
 
 /// The sentence's line height, and its type size.
@@ -1053,6 +831,7 @@ fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::surface::card;
 
     #[test]
     fn measures_match_the_tokens() {
@@ -1064,7 +843,7 @@ mod tests {
             ("card.under_title", UNDER_TITLE),
             ("card.above_buttons", ABOVE_BUTTONS),
             ("card.between_buttons", BETWEEN),
-            ("card.context_words", CONTEXT as f64),
+            ("card.context_words", card::CONTEXT as f64),
             ("button.height", BUTTON_H),
             ("button.side", BUTTON_SIDE),
             ("type.sentence.size", TEXT),
@@ -1080,10 +859,6 @@ mod tests {
             ("shadow.soft.share", f64::from(SHADOW_SOFT.3)),
             ("motion.card_fade_ms", FADE * 1000.0),
             ("motion.card_rise", RISE),
-            (
-                "motion.accepted_ms",
-                crate::macos::app::FLASH.as_millis() as f64,
-            ),
         ] {
             let theirs = num(&t, path);
             assert!(
@@ -1091,129 +866,5 @@ mod tests {
                 "{path}: {ours} here, {theirs} in tokens.json"
             );
         }
-    }
-
-    fn fix(text: &str, gone: &str, replacement: &str) -> Fix {
-        let byte = text.rfind(gone).unwrap();
-        let start = text[..byte].chars().count();
-        Fix {
-            start,
-            end: start + gone.chars().count(),
-            replacement: replacement.into(),
-            kind: Kind::Correctness,
-            message: String::new(),
-            source: Source::Ai,
-        }
-    }
-
-    fn same(s: &str) -> Bit {
-        Bit::Same(s.into())
-    }
-
-    #[test]
-    fn a_word_is_shown_in_its_sentence() {
-        let text = "Did you recieve the photos?";
-        let f = fix(text, "recieve", "receive");
-        assert_eq!(
-            snippet(text, &[&f]),
-            vec![
-                same("Did you "),
-                Bit::Gone("recieve".into()),
-                same(" "),
-                Bit::New("receive".into()),
-                same(" the photos?"),
-            ]
-        );
-    }
-
-    #[test]
-    fn a_removal_is_struck_where_it_was() {
-        let text = "Can you send me the the link for the frame.io draft when you have a sec?";
-        let byte = text.find("the the").unwrap() + 4;
-        let start = text[..byte].chars().count();
-        let f = Fix {
-            start,
-            end: start + 4,
-            replacement: String::new(),
-            kind: Kind::Correctness,
-            message: String::new(),
-            source: Source::Ai,
-        };
-        assert_eq!(
-            snippet(text, &[&f]),
-            vec![
-                same("Can you send me the "),
-                Bit::Gone("the".into()),
-                same(" link for the frame.io draft when…"),
-            ]
-        );
-    }
-
-    #[test]
-    fn a_long_sentence_is_cut_around_the_change() {
-        let text = "One two three four five six seven eight nine tehn eleven twelve thirteen fourteen fifteen sixteen seventeen.";
-        let f = fix(text, "tehn", "ten");
-        let bits = snippet(text, &[&f]);
-        assert_eq!(
-            bits.first(),
-            Some(&same("…four five six seven eight nine "))
-        );
-        assert_eq!(
-            bits.last(),
-            Some(&same(" eleven twelve thirteen fourteen fifteen sixteen…"))
-        );
-    }
-
-    #[test]
-    fn a_change_of_spaces_alone_is_visible() {
-        let text = "yes  was";
-        let f = fix(text, "  ", " ");
-        assert_eq!(
-            snippet(text, &[&f]),
-            vec![same("yes "), Bit::Gone(SPACE.into()), same(" was")]
-        );
-    }
-
-    #[test]
-    fn a_rewrite_is_not_shown_word_by_word() {
-        let text = "I think it would maybe be better if we could try to move it.";
-        let mut f = fix(
-            text,
-            "it would maybe be better if we could try to",
-            "we should",
-        );
-        f.kind = Kind::Clarity;
-        assert_eq!(
-            snippet(text, &[&f]),
-            vec![
-                same("I think "),
-                Bit::Gone("it would maybe be better if we could try to".into()),
-                same(" "),
-                Bit::New("we should".into()),
-                same(" move it."),
-            ]
-        );
-    }
-
-    #[test]
-    fn several_fixes_share_one_sentence() {
-        let text = "i went to paris on monday and it was great.";
-        let fixes = [
-            fix(text, "i went", "I went"),
-            fix(text, "paris", "Paris"),
-            fix(text, "monday", "Monday"),
-        ];
-        let refs: Vec<&Fix> = fixes.iter().collect();
-        let bits = snippet(text, &refs);
-        let news: Vec<&Bit> = bits.iter().filter(|b| matches!(b, Bit::New(_))).collect();
-        assert_eq!(
-            news,
-            vec![
-                &Bit::New("I".into()),
-                &Bit::New("Paris".into()),
-                &Bit::New("Monday".into())
-            ]
-        );
-        assert_eq!(bits.last(), Some(&same(" and it was great.")));
     }
 }

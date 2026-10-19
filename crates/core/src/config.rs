@@ -103,6 +103,14 @@ impl Config {
         self.save_to(&config_path())
     }
 
+    /// Loads, changes and saves in one step; a file that cannot be read
+    /// starts from the defaults rather than blocking the change.
+    pub fn update(change: impl FnOnce(&mut Config)) -> Result<()> {
+        let mut config = Self::load().unwrap_or_default();
+        change(&mut config);
+        config.save()
+    }
+
     /// Written to a temporary file and renamed over the target, with the key
     /// readable by this user only.
     pub fn save_to(&self, path: &Path) -> Result<()> {

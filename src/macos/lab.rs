@@ -16,7 +16,9 @@
 //! The clipboard is used, as the app uses it, and put back at the end.
 
 use crate::macos::ax::{self, Field};
-use crate::macos::{paste, write};
+use crate::macos::paste;
+use crate::surface::Field as _;
+use crate::surface::write;
 use anyhow::{Context, Result, bail};
 use gramly_core::{Fix, Kind, Source};
 use objc2::rc::Retained;
@@ -1134,7 +1136,7 @@ fn audit(lab: &mut dyn Surface, id: &str, case: &Case, tally: &mut Tally) -> Res
             continue;
         };
         let (at, len) = fix.utf16(&value);
-        let drawn = field.bounds(at, len);
+        let drawn = field.bounds_utf16(at, len);
         let truth = lab.ask(json!({"cmd": "rect", "field": id, "word": from, "nth": n}))?;
         let truth: Option<Vec<f64>> = serde_json::from_value(truth["rect"].clone()).ok();
         match (drawn, truth) {
@@ -1186,7 +1188,9 @@ fn audit(lab: &mut dyn Surface, id: &str, case: &Case, tally: &mut Tally) -> Res
             break;
         };
         let want = replace_nth(&truth, from, to, n).unwrap_or_default();
-        let outcome = accept(lab, id, &want, tally, || write::one(&field, &value, &fix))?;
+        let outcome = accept(lab, id, &want, tally, || {
+            write::one(&field, &value, &fix, &paste::Pasteboard)
+        })?;
         record(tally, case.name, &format!("{from:?} -> {to:?}"), &outcome);
         if outcome != Result_::Exact {
             break;
@@ -1236,7 +1240,7 @@ fn audit(lab: &mut dyn Surface, id: &str, case: &Case, tally: &mut Tally) -> Res
         let fixes: Vec<Fix> = group.iter().map(|(f, _, _)| f.clone()).collect();
         let what = format!("the sentence with {}", fixes.len());
         let outcome = accept(lab, id, &want, tally, || {
-            write::many(&field, &value, &fixes)
+            write::many(&field, &value, &fixes, &paste::Pasteboard)
         })?;
         record(tally, case.name, &what, &outcome);
         if outcome != Result_::Exact {

@@ -2,16 +2,31 @@
 # Build Gramly and install it as a menu bar app that starts at login.
 #
 # Everything lands under $HOME - ~/Applications/Gramly.app and one
-# LaunchAgent - with no sudo. Run from a release tarball it uses the binary in
+# LaunchAgent on macOS, ~/.local/bin/gramly and one systemd user unit on
+# Linux - with no sudo. Run from a release tarball it uses the binary in
 # bin/ and needs no compiler; run from a checkout it builds first. One install
 # path for both, as in Flow, so the two cannot drift.
 set -euo pipefail
 
-if [ "$(uname -s)" != "Darwin" ]; then
-  echo "This installer is for macOS - this is $(uname -s)." >&2
-  echo "The Linux build is not ready yet; \`gramly check\` works anywhere cargo does." >&2
-  exit 1
-fi
+os="$(uname -s)"
+case "$os" in
+  Darwin) ;;
+  Linux)
+    # Wayland tells a client nothing about where a window or the pointer is;
+    # Hyprland's socket does, and Gramly asks it. Another compositor would
+    # install fine and underline nothing.
+    if [ -z "${HYPRLAND_INSTANCE_SIGNATURE:-}" ]; then
+      echo "Gramly on Linux needs Hyprland, and this is not a Hyprland session." >&2
+      echo "Run the installer from a terminal inside Hyprland." >&2
+      exit 1
+    fi
+    ;;
+  *)
+    echo "This installer is for macOS and Linux (Hyprland) - this is $os." >&2
+    echo "\`gramly check\` works anywhere cargo does." >&2
+    exit 1
+    ;;
+esac
 
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 channel="$(cat "$repo/packaging/channel")"
@@ -28,6 +43,109 @@ log="$HOME/Library/Logs/gramly.log"
 
 say() { printf '\n\033[1m%s\033[0m\n' "$1"; }
 
+flag="--force-renderer-accessibility"
+
+# Whether a flag file already holds the flag, on a line of its own or among
+# others, ignoring comments.
+has_flag() {
+  [ -f "$1" ] && grep -v '^[[:space:]]*#' "$1" | tr -s ' \t' '\n\n' | grep -qxF -- "$flag"
+}
+
+# Appended to the file a symlink points at: flag files are often links into a
+# dotfiles repo, and replacing the link would orphan the repo's copy.
+add_flag() {
+  local target
+  target="$(readlink -m "$1")"
+  mkdir -p "$(dirname "$target")"
+  if [ -s "$target" ] && [ -n "$(tail -c1 "$target")" ]; then echo >> "$target"; fi
+  echo "$flag" >> "$target"
+}
+
+# Chromium and Electron build no accessibility tree unless told to, so
+# without the flag they show Gramly no text field. Asked, never assumed: it
+# makes those apps a little slower.
+offer_flags() {
+  local config="${XDG_CONFIG_HOME:-$HOME/.config}" file answer
+  say "Chrome and Electron apps"
+  for file in "$config/chrome-flags.conf" "$config/electron-flags.conf"; do
+    if has_flag "$file"; then
+      echo "$file already has $flag"
+    elif [ -t 0 ]; then
+      read -r -p "Add $flag to $file? [y/N] " answer
+      case "$answer" in
+        [yY]*) add_flag "$file"; echo "added to $(readlink -m "$file")" ;;
+      esac
+    else
+      echo "Not asked (no terminal). To add it: echo $flag >> $file"
+    fi
+  done
+  cat <<MSG
+
+Restart those apps afterwards. Slack, ChatGPT, Orca and other apps that ship
+their own Electron read neither file: add $flag to the
+Exec line of a copy of their .desktop file in ~/.local/share/applications.
+MSG
+}
+
+# The user manager must hold the session's Wayland and Hyprland variables, or
+# the unit starts without them and fails. uwsm puts them there; a plain
+# Hyprland start may not.
+check_session_environment() {
+  local missing="" name
+  for name in WAYLAND_DISPLAY HYPRLAND_INSTANCE_SIGNATURE; do
+    systemctl --user show-environment | grep -q "^$name=" || missing="$missing $name"
+  done
+  [ -z "$missing" ] && return
+  systemctl --user import-environment $missing
+  cat <<MSG
+The systemd user manager did not have:$missing
+Imported for this session. For the next login, have Hyprland run
+  systemctl --user import-environment WAYLAND_DISPLAY HYPRLAND_INSTANCE_SIGNATURE
+at startup (uwsm does this for you).
+MSG
+}
+
+install_linux() {
+  local bin="$HOME/.local/bin" units="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+  local log="${XDG_STATE_HOME:-$HOME/.local/state}/gramly/gramly.log"
+
+  say "Installing Gramly $version ($channel) to $bin/gramly"
+  # Stopped before the binary is replaced: copying over a running one fails.
+  systemctl --user stop gramly.service 2>/dev/null || true
+  mkdir -p "$bin" "$units" "$(dirname "$log")"
+  cp "$binary" "$bin/gramly"
+  # %h and %S are systemd's home and state directory, the same paths the
+  # menu's "Copy recent log" reads.
+  cat > "$units/gramly.service" <<UNIT
+[Unit]
+Description=Gramly grammar checker
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+ExecStart=%h/.local/bin/gramly
+Restart=on-failure
+RestartSec=3
+StandardError=append:%S/gramly/gramly.log
+
+[Install]
+WantedBy=graphical-session.target
+UNIT
+  check_session_environment
+  systemctl --user daemon-reload
+  systemctl --user enable --now gramly.service
+  offer_flags
+
+  say "Done"
+  cat <<MSG
+Gramly is in your tray and starts with your session.
+
+Check what it can see in a field with: $bin/gramly doctor
+For AI suggestions, open the tray icon > OpenRouter key...
+Logs: $log
+MSG
+}
+
 if [ -x "$repo/bin/gramly" ]; then
   binary="$repo/bin/gramly"
   version="$("$binary" --version | awk '{print $2}')"
@@ -40,6 +158,11 @@ else
     | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')"
   binary="$target/release/gramly"
   version="$(sed -n 's/^version = "\(.*\)"/\1/p' "$repo/Cargo.toml" | head -1)"
+fi
+
+if [ "$os" = Linux ]; then
+  install_linux
+  exit 0
 fi
 
 say "Installing Gramly $version ($channel) to $app"

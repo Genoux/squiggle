@@ -7,11 +7,13 @@
 //! report, not a detail. All of it, every item in every type: saving only
 //! the text lost a copied screenshot to the first fix accepted.
 
+use crate::surface::write::{Paste, Refusal};
 use objc2::runtime::ProtocolObject;
 use objc2_app_kit::{NSPasteboard, NSPasteboardItem, NSPasteboardTypeString};
 use objc2_core_graphics::{CGEvent, CGEventFlags, CGEventTapLocation};
 use objc2_foundation::{NSArray, NSData, NSString};
 use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 /// `kVK_ANSI_V`.
@@ -22,7 +24,7 @@ const KEY_Z: u16 = 6;
 const KEY_RIGHT: u16 = 124;
 /// `kVK_LeftArrow`.
 const KEY_LEFT: u16 = 123;
-/// `kVK_Delete`, the key labelled delete: backspace.
+/// `kVK_Delete`, the key labelled Delete that erases backwards.
 const KEY_DELETE: u16 = 51;
 
 /// How long the target app gets to read the pasteboard before it is
@@ -30,26 +32,54 @@ const KEY_DELETE: u16 = 51;
 /// run-loop turn; restoring sooner pasted the user's old clipboard instead.
 const RESTORE_AFTER: Duration = Duration::from_millis(250);
 
-pub fn paste(text: &str) {
-    let board = NSPasteboard::generalPasteboard();
-    let kind = unsafe { NSPasteboardTypeString };
-    let saved = save(&board);
+/// The pasteboard half of the paste fallback; see [`Paste`].
+pub struct Pasteboard;
 
-    board.clearContents();
-    board.setString_forType(&NSString::from_str(text), kind);
+/// The user's pasteboard while Gramly's text is on it. Held until it is put
+/// back, so a second stage cannot save the first's text as the user's.
+static STAGED: Mutex<Option<Saved>> = Mutex::new(None);
 
-    command(KEY_V);
-
-    std::thread::spawn(move || {
-        std::thread::sleep(RESTORE_AFTER);
-        restore(&NSPasteboard::generalPasteboard(), saved);
-    });
+fn staged() -> MutexGuard<'static, Option<Saved>> {
+    STAGED.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-/// Delete in the focused app: removes the selection. Every field
-/// understands it, where an empty paste is ignored by some.
-pub fn delete() {
-    press(KEY_DELETE, CGEventFlags::empty());
+impl Paste for Pasteboard {
+    fn stage(&self, text: &str) -> Result<(), Refusal> {
+        let mut held = staged();
+        if held.is_some() {
+            return Err("a paste is already in flight");
+        }
+        let board = NSPasteboard::generalPasteboard();
+        let kind = unsafe { NSPasteboardTypeString };
+        *held = Some(save(&board));
+        board.clearContents();
+        board.setString_forType(&NSString::from_str(text), kind);
+        Ok(())
+    }
+
+    fn send(&self) -> Result<(), Refusal> {
+        command(KEY_V);
+        std::thread::spawn(|| {
+            std::thread::sleep(RESTORE_AFTER);
+            put_back();
+        });
+        Ok(())
+    }
+
+    fn unstage(&self) {
+        put_back();
+    }
+
+    fn delete_selection(&self) -> Result<(), Refusal> {
+        press(KEY_DELETE, CGEventFlags::empty());
+        Ok(())
+    }
+}
+
+fn put_back() {
+    if let Some(saved) = staged().take() {
+        restore(&NSPasteboard::generalPasteboard(), saved);
+    }
 }
 
 /// ⌘Z in the focused app: takes back a fix that went wrong.

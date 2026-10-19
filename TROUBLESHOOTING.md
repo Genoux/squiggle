@@ -1,6 +1,6 @@
 # Troubleshooting
 
-Start with `gramly doctor` (or
+Start with `gramly doctor` (on a Mac
 `~/Applications/Gramly.app/Contents/MacOS/gramly doctor`), click into the field
 that is misbehaving, and read what it says.
 
@@ -39,3 +39,27 @@ slower than that, report it with the app's name.
 ## Logs
 
 `~/Library/Logs/gramly.log`. The key is never logged.
+
+## Linux
+
+- **Nothing is underlined in Chrome, Slack, Discord or VS Code.** Chromium and
+  Electron build no accessibility tree unless started with
+  `--force-renderer-accessibility`. `gramly doctor` says so: *focused field:
+  none: ... is Chromium with no accessibility tree; start it with
+  --force-renderer-accessibility*. Add the flag to
+  `~/.config/chrome-flags.conf` or `~/.config/electron-flags.conf` and restart
+  the app. Apps that bundle their own Electron (Slack, ChatGPT, Orca) read no
+  flag file: put it on the `Exec` line of a copy of their `.desktop` file in
+  `~/.local/share/applications`.
+- **Nothing happens on GNOME, KDE or Sway.** Gramly is Hyprland only: it asks
+  Hyprland's socket where windows and the pointer are, and Wayland offers no
+  other way. `gramly doctor` reports *front window: none* outside Hyprland.
+- **No tray icon.** The panel needs a StatusNotifierItem host. Gramly keeps
+  running without one and the icon appears when the host does.
+- **The service fails at login.** `systemctl --user status gramly` and the
+  log; usually `WAYLAND_DISPLAY` or `HYPRLAND_INSTANCE_SIGNATURE` is missing
+  from systemd's user environment. Have Hyprland run
+  `systemctl --user import-environment WAYLAND_DISPLAY HYPRLAND_INSTANCE_SIGNATURE`
+  at startup.
+- **Logs** are in `~/.local/state/gramly/gramly.log` (`$XDG_STATE_HOME`), and
+  the tray's *Copy recent log* copies the end of it.

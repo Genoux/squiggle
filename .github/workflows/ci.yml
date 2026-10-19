@@ -56,16 +56,22 @@ jobs:
           bash -n packaging/install.sh
           bash -n packaging/uninstall.sh
 
-  # The engine is shared with the Linux surface to come. Testing it on Linux
-  # now keeps a macOS-only assumption from creeping into gramly-core.
+  # The Linux surface links GTK 4 and gtk4-layer-shell. ubuntu-latest's
+  # noble has no libgtk4-layer-shell-dev, so the job runs in Arch, where both
+  # are packages, the platform the surface is built and measured on.
   linux:
     runs-on: ubuntu-latest
+    container: archlinux:latest
     steps:
+      - name: System packages
+        run: pacman -Syu --noconfirm --needed base-devel git gtk4 gtk4-layer-shell rustup
+
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy, rustfmt
+      # Reads the channel from rust-toolchain.toml, which is why it follows
+      # the checkout.
+      - name: Rust
+        run: rustup toolchain install --profile minimal --component clippy --component rustfmt
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -80,3 +86,8 @@ jobs:
 
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Packaging
+        run: |
+          bash -n packaging/install.sh
+          bash -n packaging/uninstall.sh

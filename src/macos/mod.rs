@@ -1,20 +1,15 @@
-/// A line in `~/Library/Logs/gramly.log`, with the time: "it happened
-/// again" can only be matched to a log line that says when.
-macro_rules! note {
-    ($($arg:tt)*) => {
-        $crate::macos::note_line(&format!($($arg)*))
-    };
-}
-
 mod app;
 mod ax;
 mod dictionary;
+mod host;
 mod lab;
 mod overlay;
 mod paste;
 mod preview;
 mod theme;
-mod write;
+
+use crate::surface::{self, Field as _, Rect};
+use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 
 pub use app::run;
 pub use lab::{host as lab_host, run as lab};
@@ -33,18 +28,7 @@ pub fn doctor() -> anyhow::Result<()> {
             "NOT allowed (System Settings > Privacy & Security > Accessibility)"
         }
     );
-    println!(
-        "checking         {}",
-        if config.enabled { "on" } else { "paused" }
-    );
-    println!(
-        "ai suggestions   {}",
-        match (config.ai, config.openrouter_key.is_some()) {
-            (true, true) => "on (key set)",
-            (true, false) => "off - no OpenRouter key",
-            (false, _) => "off",
-        }
-    );
+    print!("{}", surface::config_lines(&config));
     println!("\nclick into a text field; looking in 3 seconds...");
     std::thread::sleep(std::time::Duration::from_secs(3));
     if let Some(pid) = ax::frontmost_pid() {
@@ -72,7 +56,7 @@ pub fn doctor() -> anyhow::Result<()> {
             let first = text.encode_utf16().take(5).count();
             println!(
                 "word positions   {}",
-                match field.bounds(0, first.max(1)) {
+                match field.bounds_utf16(0, first.max(1)) {
                     Some(rect) => format!("supported ({rect:?})"),
                     None => "NOT reported by this app - underlines cannot be placed".into(),
                 }
@@ -82,10 +66,28 @@ pub fn doctor() -> anyhow::Result<()> {
     Ok(())
 }
 
-pub(crate) fn note_line(message: &str) {
-    use objc2_foundation::{NSDate, NSDateFormatter, NSString};
-    let formatter = NSDateFormatter::new();
-    formatter.setDateFormat(Some(&NSString::from_str("yyyy-MM-dd HH:mm:ss.SSS")));
-    let now = formatter.stringFromDate(&NSDate::now());
-    eprintln!("{now} gramly: {message}");
+impl From<CGRect> for Rect {
+    fn from(rect: CGRect) -> Self {
+        Rect {
+            x: rect.origin.x,
+            y: rect.origin.y,
+            w: rect.size.width,
+            h: rect.size.height,
+        }
+    }
+}
+
+impl From<Rect> for CGRect {
+    fn from(rect: Rect) -> Self {
+        CGRect::new(CGPoint::new(rect.x, rect.y), CGSize::new(rect.w, rect.h))
+    }
+}
+
+/// The height of the primary display, which Accessibility measures y down
+/// from and Cocoa measures y up from.
+pub(crate) fn primary_height(mtm: objc2::MainThreadMarker) -> f64 {
+    objc2_app_kit::NSScreen::screens(mtm)
+        .firstObject()
+        .map(|primary| primary.frame().size.height)
+        .unwrap_or(0.0)
 }

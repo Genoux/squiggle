@@ -4,8 +4,21 @@
 //! would be underlined - the same engine, without a screen, for debugging a
 //! suggestion and for scripts.
 
+/// A line in the log, with the time: "it happened again" can only be
+/// matched to a log line that says when. Defined before the modules so
+/// every one of them sees it.
+macro_rules! note {
+    ($($arg:tt)*) => {
+        $crate::note_line(&format!($($arg)*))
+    };
+}
+
+#[cfg(target_os = "linux")]
+mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+mod surface;
 
 use anyhow::{Result, bail};
 use gramly_core::{Config, Local, ai, config, improve, protect};
@@ -21,6 +34,8 @@ fn main() -> Result<()> {
         ),
         #[cfg(target_os = "macos")]
         Some("doctor") => macos::doctor(),
+        #[cfg(target_os = "linux")]
+        Some("doctor") => linux::doctor(),
         #[cfg(target_os = "macos")]
         Some("lab") => macos::lab(&args[1..]),
         #[cfg(target_os = "macos")]
@@ -33,11 +48,11 @@ fn main() -> Result<()> {
         }
         Some("help" | "--help" | "-h") => {
             println!(
-                "gramly            run (menu bar app)\n\
+                "gramly            run\n\
                  gramly check      print suggestions for text on stdin\n\
                  gramly check --local   the on-device pass only, nothing sent\n\
                  gramly check --improve   the clearer wording the app proposes\n\
-                 gramly doctor     what Gramly can see in the focused field (macOS)\n\
+                 gramly doctor     what Gramly can see in the focused field\n\
                  gramly lab        audit accepting fixes in real text fields, off screen (macOS)\n\
                  gramly preview [dir]   draw every card and the dictionary to PNG (macOS)\n\
                  gramly --version"
@@ -48,14 +63,13 @@ fn main() -> Result<()> {
     }
 }
 
-#[cfg(target_os = "macos")]
 fn run() -> Result<()> {
-    macos::run()
-}
-
-#[cfg(not(target_os = "macos"))]
-fn run() -> Result<()> {
-    bail!("the Linux surface is not built yet; `gramly check` works everywhere")
+    #[cfg(target_os = "macos")]
+    return macos::run();
+    #[cfg(target_os = "linux")]
+    return linux::run();
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    bail!("this platform has no surface yet; `gramly check` works everywhere")
 }
 
 /// The model's fixes for `text`, asked a paragraph at a time as the app
@@ -117,4 +131,80 @@ fn check(local_only: bool, improving: bool) -> Result<()> {
         );
     }
     Ok(())
+}
+
+pub(crate) fn note_line(message: &str) {
+    eprintln!("{} gramly: {message}", local_time());
+}
+
+fn local_time_at(at: std::time::SystemTime) -> libc::tm {
+    let seconds = at
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as libc::time_t;
+    let mut broken_down: libc::tm = unsafe { std::mem::zeroed() };
+    unsafe { libc::localtime_r(&seconds, &mut broken_down) };
+    broken_down
+}
+
+/// "yyyy-MM-dd HH:mm:ss.SSS" in the machine's time zone.
+fn local_time() -> String {
+    let now = std::time::SystemTime::now();
+    let broken_down = local_time_at(now);
+    format!(
+        "{:04}-{:02}-{:02} {:02}:{:02}:{:02}.{:03}",
+        broken_down.tm_year + 1900,
+        broken_down.tm_mon + 1,
+        broken_down.tm_mday,
+        broken_down.tm_hour,
+        broken_down.tm_min,
+        broken_down.tm_sec,
+        now.duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .subsec_millis()
+    )
+}
+
+/// "HH:MM" in the machine's time zone.
+#[cfg(target_os = "linux")]
+fn clock_time(at: std::time::SystemTime) -> String {
+    let broken_down = local_time_at(at);
+    format!("{:02}:{:02}", broken_down.tm_hour, broken_down.tm_min)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::local_time;
+    #[cfg(target_os = "linux")]
+    use super::{clock_time, local_time_at};
+    #[cfg(target_os = "linux")]
+    use std::time::{Duration, SystemTime};
+
+    #[test]
+    fn log_time_has_the_shape_the_log_always_had() {
+        let shape: String = local_time()
+            .chars()
+            .map(|c| if c.is_ascii_digit() { '9' } else { c })
+            .collect();
+        assert_eq!(shape, "9999-99-99 99:99:99.999");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn clock_time_is_hours_and_minutes() {
+        let shape: String = clock_time(SystemTime::now())
+            .chars()
+            .map(|c| if c.is_ascii_digit() { '9' } else { c })
+            .collect();
+        assert_eq!(shape, "99:99");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn clock_time_follows_the_time_it_is_given() {
+        let now = SystemTime::now();
+        let later = now + Duration::from_secs(60);
+        let minute = |at| local_time_at(at).tm_min;
+        assert_eq!((minute(now) + 1) % 60, minute(later));
+    }
 }

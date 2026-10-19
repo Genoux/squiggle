@@ -5,6 +5,9 @@
 //! would hang Gramly with it, so the system-wide element gets a short
 //! messaging timeout and every caller treats "no answer" as "no field".
 
+use crate::surface::write::{classify, read_back, settle};
+use crate::surface::{self, Field as _, Focus, Rect, Write};
+use gramly_core::fix::utf16_range;
 use objc2_app_kit::NSRunningApplication;
 use objc2_application_services::{AXError, AXUIElement, AXValue, AXValueType};
 use objc2_core_foundation::{
@@ -16,14 +19,6 @@ use std::ptr::NonNull;
 /// Long enough for a busy Electron app to answer, short enough that a hung
 /// one costs a skipped frame rather than a frozen menu bar.
 const MESSAGING_TIMEOUT: f32 = 0.15;
-
-/// How long a write gets to show. Zen applies a selection and a write to
-/// `AXSelectedText` a moment after accepting them: read at once, the old
-/// text came back, the write was taken for refused and the fix was pasted
-/// a second time ("oldad from frameold ad from"). Apps that answer at once
-/// cost nothing; Chromium, which ignores the write, costs this before its
-/// paste.
-const SETTLE: std::time::Duration = std::time::Duration::from_millis(300);
 
 /// Apps whose "text area" is a terminal's scrollback. Correcting a shell
 /// command is never what was meant, and Grammarly skips them for the same
@@ -100,20 +95,6 @@ type OffsetMap = Vec<Option<usize>>;
 fn web(element: &AXUIElement) -> bool {
     attribute(element, "AXEditableAncestor").is_some()
         || attribute(element, "AXDOMIdentifier").is_some()
-}
-
-/// What a direct write did.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Write {
-    /// The field now reads as expected.
-    Done,
-    /// The field is exactly as it was: the app ignored the write, and the
-    /// paste may try.
-    Ignored,
-    /// The selection could not be confirmed, or the field changed into
-    /// something else. Nothing more may be written: a paste now could land
-    /// on the wrong text.
-    Unsafe,
 }
 
 struct Segment {
@@ -246,27 +227,13 @@ pub fn wake(pid: i32) {
     unsafe { app.set_attribute_value(&name, yes) };
 }
 
-/// What has keyboard focus, as far as underlining goes.
-pub enum Focus {
-    /// The field already being read: answered without asking it anything.
-    Same,
-    /// Another editable text field.
-    Field(Box<Field>),
-    /// An answer that it is not one: another control, a terminal, a password
-    /// field, Gramly's own window. The field is given up at once.
-    Elsewhere,
-    /// No answer: the app is busy or has just come forward. Not proof that
-    /// focus left; see `app::GRACE`.
-    Unknown,
-}
-
 /// What has keyboard focus, `current` being the field read last tick. The
 /// same element is recognised before any question about it, so a field in
 /// use costs one round trip a tick, not five.
-pub fn focus(current: Option<&Field>) -> Focus {
+pub fn focus(current: Option<&Field>) -> Focus<Field> {
     match examine_focus(current) {
         Ok(None) => Focus::Same,
-        Ok(Some(field)) => Focus::Field(Box::new(field)),
+        Ok(Some(field)) => Focus::Field(field),
         Err((true, _)) => Focus::Elsewhere,
         Err((false, _)) => Focus::Unknown,
     }
@@ -375,41 +342,6 @@ impl Field {
         }
     }
 
-    /// The field's text, empty while it only shows its placeholder. Web
-    /// composers draw the placeholder as text: ChatGPT's empty box in Zen
-    /// reads "Ask ChatGPT\n", with no AXPlaceholderValue, the same words in
-    /// AXDescription. Checking it underlined the placeholder.
-    pub fn value(&self) -> Option<String> {
-        let value = string_attribute(&self.element, "AXValue")?;
-        let shown = value.trim();
-        if shown.is_empty() {
-            return Some(value);
-        }
-        let labels = self.labels.get_or_init(|| {
-            ["AXPlaceholderValue", "AXDescription", "AXTitle"]
-                .into_iter()
-                .filter_map(|name| string_attribute(&self.element, name))
-                .map(|label| label.trim().to_string())
-                .filter(|label| !label.is_empty())
-                .collect()
-        });
-        let placeholder = labels.iter().any(|label| label == shown);
-        let text = if placeholder {
-            String::new()
-        } else if web(&self.element) {
-            self.with_lines(value)
-        } else {
-            value
-        };
-        if self.hidden.borrow().0 != text {
-            let map = align(&self.element, &text);
-            *self.hidden.borrow_mut() = (text.clone(), map, true);
-            let reliable = self.offsets_hold(&text);
-            self.hidden.borrow_mut().2 = reliable;
-        }
-        Some(text)
-    }
-
     /// `value` with a line break wherever the field shows a new line and the
     /// value has none. Zen reports a box of three paragraphs as one run of
     /// text ("...we roll backThanks"), and Gramly read "backThanks" as one
@@ -425,6 +357,12 @@ impl Field {
         let rebuilt = add_line_breaks(&value, &blocks_of(&self.element));
         *self.lines.borrow_mut() = Some((value, rebuilt.clone()));
         rebuilt
+    }
+
+    /// A char range of the text [`value`](surface::Field::value) last read,
+    /// as `(location, length)` in UTF-16 units.
+    fn utf16(&self, start: usize, len: usize) -> (usize, usize) {
+        utf16_range(&self.hidden.borrow().0, start, start + len)
     }
 
     /// A UTF-16 range of the value as the app counts it; see
@@ -474,34 +412,10 @@ impl Field {
         Some(CGRect::new(origin, size))
     }
 
-    /// The part of the field actually on screen. A long text view is as tall
-    /// as its whole document (TextEdit reported 2977pt for a window a third of
-    /// that), so its own frame cannot clip anything; the scroll area around it
-    /// is the visible part. Walks up at most three parents to find one.
-    pub fn visible_frame(&self) -> Option<CGRect> {
-        let own = self.frame()?;
-        let mut current = self.element.clone();
-        for _ in 0..3 {
-            let Some(parent) =
-                attribute(&current, "AXParent").and_then(|v| v.downcast::<AXUIElement>().ok())
-            else {
-                break;
-            };
-            if string_attribute(&parent, "AXRole").as_deref() == Some("AXScrollArea") {
-                let position = attribute(&parent, "AXPosition")?;
-                let size = attribute(&parent, "AXSize")?;
-                let area = CGRect::new(point_of(&position)?, size_of(&size)?);
-                return Some(intersect(own, area));
-            }
-            current = parent;
-        }
-        Some(own)
-    }
-
     /// Where a UTF-16 range is drawn, in the same coordinates as [`frame`].
     /// Asked of the field, or of the text child holding the range when the
     /// field cannot say. `None` and that fix is simply not drawn.
-    pub fn bounds(&self, location: usize, length: usize) -> Option<CGRect> {
+    pub fn bounds_utf16(&self, location: usize, length: usize) -> Option<CGRect> {
         if !self.hidden.borrow().2
             && let Some(rect) = self.through_children(location, length)
         {
@@ -566,10 +480,10 @@ impl Field {
     }
 
     /// Selects a UTF-16 range in the field; whether the app reports that
-    /// exact range selected within [`SETTLE`].
+    /// exact range selected within `SETTLE`.
     /// Selects a UTF-16 range of the value [`value`](Self::value) last
     /// read, and confirms the app selected exactly that text.
-    pub fn select(&self, location: usize, length: usize) -> bool {
+    pub fn select_utf16(&self, location: usize, length: usize) -> bool {
         let value_location = location;
         let value_end = location + length;
         let original = {
@@ -812,7 +726,7 @@ impl Field {
     /// result is read back rather than trusted - and only a field left
     /// exactly as it was counts as ignored. One that changed into anything
     /// else did take a write, and pasting the fix on top wrote it twice.
-    pub fn replace(
+    pub fn replace_utf16(
         &self,
         location: usize,
         length: usize,
@@ -828,22 +742,98 @@ impl Field {
             self.direct.set(Some(false));
             return Write::Ignored;
         }
-        if !self.select(location, length) {
+        if !self.select_utf16(location, length) {
             return Write::Unsafe;
         }
         let name = CFString::from_static_str("AXSelectedText");
         let value = CFString::from_str(text);
         let written = unsafe { self.element.set_attribute_value(&name, &value) };
-        if written == AXError::Success && settle(|| self.value().as_deref() == Some(expected)) {
-            self.direct.set(Some(true));
-            return Write::Done;
-        }
-        if self.value().as_deref() == Some(before) {
-            self.direct.set(Some(false));
-            Write::Ignored
+        let after = if written == AXError::Success {
+            read_back(|| self.value(), expected)
         } else {
-            Write::Unsafe
+            self.value()
+        };
+        let outcome = classify(before, after.as_deref(), expected);
+        if outcome != Write::Unsafe {
+            self.direct.set(Some(outcome == Write::Done));
         }
+        outcome
+    }
+}
+
+impl surface::Field for Field {
+    /// The field's text, empty while it only shows its placeholder. Web
+    /// composers draw the placeholder as text: ChatGPT's empty box in Zen
+    /// reads "Ask ChatGPT\n", with no AXPlaceholderValue, the same words in
+    /// AXDescription. Checking it underlined the placeholder.
+    fn value(&self) -> Option<String> {
+        let value = string_attribute(&self.element, "AXValue")?;
+        let shown = value.trim();
+        if shown.is_empty() {
+            return Some(value);
+        }
+        let labels = self.labels.get_or_init(|| {
+            ["AXPlaceholderValue", "AXDescription", "AXTitle"]
+                .into_iter()
+                .filter_map(|name| string_attribute(&self.element, name))
+                .map(|label| label.trim().to_string())
+                .filter(|label| !label.is_empty())
+                .collect()
+        });
+        let placeholder = labels.iter().any(|label| label == shown);
+        let text = if placeholder {
+            String::new()
+        } else if web(&self.element) {
+            self.with_lines(value)
+        } else {
+            value
+        };
+        if self.hidden.borrow().0 != text {
+            let map = align(&self.element, &text);
+            *self.hidden.borrow_mut() = (text.clone(), map, true);
+            let reliable = self.offsets_hold(&text);
+            self.hidden.borrow_mut().2 = reliable;
+        }
+        Some(text)
+    }
+
+    /// The part of the field actually on screen. A long text view is as tall
+    /// as its whole document (TextEdit reported 2977pt for a window a third of
+    /// that), so its own frame cannot clip anything; the scroll area around it
+    /// is the visible part. Walks up at most three parents to find one.
+    fn visible_frame(&self) -> Option<Rect> {
+        let own = self.frame()?;
+        let mut current = self.element.clone();
+        for _ in 0..3 {
+            let Some(parent) =
+                attribute(&current, "AXParent").and_then(|v| v.downcast::<AXUIElement>().ok())
+            else {
+                break;
+            };
+            if string_attribute(&parent, "AXRole").as_deref() == Some("AXScrollArea") {
+                let position = attribute(&parent, "AXPosition")?;
+                let size = attribute(&parent, "AXSize")?;
+                let area = CGRect::new(point_of(&position)?, size_of(&size)?);
+                return Some(intersect(own, area).into());
+            }
+            current = parent;
+        }
+        Some(own.into())
+    }
+
+    fn bounds(&self, start: usize, len: usize) -> Option<Rect> {
+        let (location, length) = self.utf16(start, len);
+        self.bounds_utf16(location, length).map(Rect::from)
+    }
+
+    fn select(&self, start: usize, len: usize) -> bool {
+        let (location, length) = self.utf16(start, len);
+        self.select_utf16(location, length)
+    }
+
+    fn replace(&self, start: usize, len: usize, text: &str, before: &str, expected: &str) -> Write {
+        let (location, length) = utf16_range(before, start, start + len);
+        self.replace_utf16(location, length, text, before, expected)
     }
 }
 
@@ -992,20 +982,6 @@ fn align(element: &AXUIElement, text: &str) -> Option<OffsetMap> {
         if app.len() < longer {
             return None;
         }
-    }
-}
-
-/// Whether `done` comes true within [`SETTLE`], asked every 15ms.
-fn settle(mut done: impl FnMut() -> bool) -> bool {
-    let deadline = std::time::Instant::now() + SETTLE;
-    loop {
-        if done() {
-            return true;
-        }
-        if std::time::Instant::now() >= deadline {
-            return false;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(15));
     }
 }
 

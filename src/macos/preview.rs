@@ -6,6 +6,7 @@
 use crate::macos::dictionary::Dictionary;
 use crate::macos::overlay::{self, SHADE};
 use crate::macos::theme;
+use crate::surface::card;
 use anyhow::{Context, Result, anyhow};
 use gramly_core::{Fix, Kind, Source};
 use objc2::rc::Retained;
@@ -147,8 +148,9 @@ pub fn run(args: &[String]) -> Result<()> {
 
         for (file, text, fixes, hovered) in samples() {
             let group: Vec<(usize, Fix)> = fixes.into_iter().enumerate().collect();
-            let card = overlay::card(hovered, &group, text, &target, p, mtm)
-                .ok_or_else(|| anyhow!("no card for {file}"))?;
+            let content =
+                card::card(hovered, &group, text).ok_or_else(|| anyhow!("no card for {file}"))?;
+            let card = overlay::build(hovered, &content, &target, p, mtm);
             let size = card.view.frame().size;
             let shade = overlay::shade(size, p, mtm);
             let host = backdrop(shade.frame().size, ground, mtm);

@@ -11,10 +11,24 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
 - `crates/core` (`gramly-core`) knows text and nothing about screens: Harper,
   the model, merging, config. CI tests it on Linux as well as macOS so no
   platform assumption creeps in before the Linux surface exists.
-- `src/macos` is the surface: Accessibility in (`ax.rs`), panels out
-  (`overlay.rs`), the run loop and menu (`app.rs`), the paste fallback
-  (`paste.rs`), the Ink palette and font (`theme.rs`), and
-  `gramly preview` (`preview.rs`).
+- `src/surface` is everything between text and screen that is not a
+  platform: the run loop (`engine/`), what a card says (`card.rs`), where it
+  goes and when the pointer has left it (`geometry.rs`, y down from the
+  top-left as Accessibility and Hyprland report), writing a fix into a field
+  (`write.rs`) and the Ink palette's values (`theme.rs`). A platform gives
+  it a `Host`, a `Field` and an `Overlay` and nothing else; logic that
+  exists in both is a bug.
+- `src/macos` is the first platform: Accessibility in (`ax.rs`), panels out
+  (`overlay.rs`, which flips to Cocoa's y-up at its own edge), the menu
+  (`app.rs`), the OS handle (`host.rs`), the paste fallback (`paste.rs`),
+  the Ink palette's AppKit half and the font (`theme.rs`), and `gramly
+  preview` (`preview.rs`).
+- `src/linux` is the Hyprland surface: AT-SPI in (`atspi.rs`), Hyprland's
+  IPC for where windows are (`hypr.rs`). Hyprland only: Wayland tells no
+  client where a window or the pointer is, and Hyprland's socket does;
+  GNOME has no layer-shell to draw an overlay with at all. Its card is
+  still Flow's palette; it takes the Ink look from `surface/theme.rs` and
+  `design/tokens.json` when it gets one.
 - `design/` is the design system: `index.html` shows every token and
   component, `tokens.json` holds the values for the code and for the Linux
   surface. It lives in the repo because the repo is private and the page must
@@ -251,8 +265,161 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
 
 ## Offsets
 
-- `Fix` offsets are chars. macOS Accessibility counts UTF-16; `Fix::utf16` is
-  the only conversion. An emoji before a typo is the test case.
+- `Fix` offsets are chars, and so are the `Field` trait's. macOS Accessibility
+  counts UTF-16; `utf16_range` is the only conversion. An emoji before a typo is the test case.
+- AT-SPI counts chars in GTK4, Chrome and Electron ("Hello 😀 wrold":
+  offset 8 is the "w"). Gecko counts UTF-16 and keeps its text in step by
+  returning a U+FEFF after every emoji ("Hello 😀\u{feff} wrold", 31
+  chars), with a zero-width box.
+
+## Linux surface
+
+- Measured on Hyprland 0.56 against GTK4, Chrome, Electron and Zen, with
+  `gramly doctor --raw` and screenshots of the real screen.
+- Apps join the accessibility bus only once `org.a11y.Status.IsEnabled`
+  is true. GTK, Qt and Gecko notice at once; Chromium and Electron join
+  but build no tree below the window unless started with
+  `--force-renderer-accessibility`. `ACCESSIBILITY_ENABLED=1` and
+  `ScreenReaderEnabled` were tried and change nothing. The flag is the
+  Linux counterpart of `AXManualAccessibility`, except that it needs a
+  restart of the app.
+- Positions: the Hyprland window's `at` plus the app's character box.
+  Wayland hides a window's origin from the app, so Chromium and Gecko
+  answer `Screen` from their window's corner and GTK4 refuses `Screen`
+  ("Unsupported coordinate space"), answering in `Window` instead. Both
+  were pixel-exact on screen. A window capture (`grim -T`) of Chrome is
+  offset by its 10px shadow; the screen is not.
+- Character boxes, not `GetRangeExtents`: GTK4 answers a range with its
+  first character's box, Gecko with partial or empty ones. A range is the
+  union of its first and last characters' boxes.
+- Focus comes from `object:state-changed:focused` events. A walk of the
+  tree per tick is out: a Zen window with 3086 nodes took 0.44s. The walk
+  remains for a field already focused before Gramly was listening.
+- zbus proxies are built uncached: cached, each one fetches every property
+  and subscribes to changes the apps never announce, so values go stale.
+- Every call has a 150ms timeout, as on macOS; zbus's default is 25s.
+- A Gecko window that has just come forward answers empty text and no
+  boxes for a moment while its content's tree arrives; the next poll has
+  it.
+- Writing: GTK4 and Gecko offer `EditableText`; Chromium and Electron do
+  not, so their fixes are pasted over a selection made with
+  `Text.SetSelection` and confirmed with `GetSelection` (31-34ms). A paste
+  into a window without keyboard focus does nothing: Wayland offers the
+  clipboard only to the focused client. Gecko's `EditableText` is not to
+  be trusted either: asked to delete and insert in Zen, nothing changed
+  within 300ms, and what lands late lands at the caret, not the offset.
+- Hyprland 0.56 dispatches in Lua (`hl.dsp.focus({ window = "address:0x…" })`,
+  `hl.dsp.send_shortcut({ mods, key, window })`); the `j/` queries over
+  the socket are unchanged.
+- Accepting follows macOS's rules (`write.rs` is shared). A field is web
+  when its app offers no `EditableText` (Chromium, Electron) or a
+  `DocumentWeb` is among its first 30 ancestors (Gecko); it is decided once
+  per field, and one that cannot be asked about counts as web, since a
+  paste needs a confirmed selection and a write does not. Web fields are
+  never written directly. Native ones confirm the app's text at the range,
+  then `DeleteText` + `InsertText` (length in bytes, as ATK counts it),
+  then wait up to `SETTLE` (300ms) for the field to read as expected; a
+  field left exactly as it was is pasted from then on.
+- A selection is confirmed by `GetSelection(0)` and by the text in it
+  (`GetText`), within `SETTLE`. The range reaches the app through
+  `app_range`: Gecko's U+FEFF after an emoji is inside a range that ends on
+  that emoji, so deleting the emoji takes its padding.
+- Two-phase paste, shared with macOS (`write::Paste`: `stage`, then `send`
+  or `unstage`). The clipboard is staged before anything is selected, so
+  nothing stands between the confirmed selection and Ctrl+V: it was saved
+  after, and the gap was the clipboard's round trip. Staging is synchronous
+  and bounded (500ms a pipe): save every MIME type, offer the text as plain
+  text with `x-kde-passwordManagerHint`, read it back (that read only answers
+  once the compositor has it). A save that times out, errors or loses one
+  type refuses the fix - a clipboard restored without a type is not the
+  user's - and nothing is selected; an empty clipboard is fine, restore
+  clears. The restore waits 250ms on a thread and puts the clipboard back
+  only if it is still Gramly's offer (only the types it offered, holding its
+  text); one the user copied to meanwhile stays. One paste at a time.
+  A fix that only removes text is not pasted: Zen ignores a paste of empty
+  text and left the word selected for the next keystroke to replace (Chrome
+  deleted it). Backspace goes over the confirmed selection instead, and the
+  clipboard is not touched.
+- Keystrokes go to the window the field was found in, by Hyprland address,
+  never "whatever is in front": pid-addressed, a second window of the same
+  app took them. The address is pinned when the focus or window is decided,
+  and the front window is read again just before sending; if it differs
+  nothing is sent and the paste is refused. Ctrl+V and Ctrl+Z are keycodes
+  (`code:55`, `code:52`, XKB = evdev + 8), not keysym names, so a non-Latin
+  layout pastes too.
+- Web is decided by toolkit first: Gecko and Chromium (`Application.toolkit_name`
+  on the bus root) are web throughout. Gecko's `EditableText` lands late and
+  at the caret, and Firefox's URL bar has no `DocumentWeb` above it. Otherwise
+  no `EditableText` or a `DocumentWeb` above.
+- A refusal leaves the field as found: the caret is read before `select_range`
+  moves anything and put back, selection dropped, on every exit but a sent
+  paste. The selection is asked again right before Ctrl+V, in a field that
+  must still have focus: a field keeps its selection when another field in
+  the same window is clicked, and the paste would land there.
+- A native write that stopped halfway (`DeleteText` took, `InsertText` did
+  not, the field reads the text less the range) gets the original text
+  inserted back before the outcome is judged; left, it was neither ignored
+  nor done and the paste landed on altered text.
+- A field is left alone for 1s after any of its calls reaches the 150ms
+  deadline (value, frame, boxes, qualifying, web): a hung app froze the main
+  loop for another deadline per call. A write's read-back is exempt: during
+  the cooldown it read nothing, and a half-finished write went unrepaired.
+  A field taken as web only because it did not answer is asked again next
+  time, not pasted from for good. The frame that answered a box (Screen
+  or Window) is kept per field, so GTK4 is not asked Screen and refused on
+  every character. A dropped walk stops at its next node.
+- Measured at scale 1 on one monitor only; fractional scale and several
+  monitors were not tested.
+- A selection starts with the caret, and each step is waited for. Gecko
+  keeps the caret as a range of its own beside the one `AddSelection`
+  adds and reports only the added one, so every check passed while a
+  paste cleared "teh" and typed "the" at the caret: with the caret at 0,
+  Zen read "theThe weather was nice and  sun". Moving the caret to the
+  range's start first fixes that, but Chromium applies each request later
+  in its renderer, and a caret move landing after the selection collapsed
+  it ("theteh"). So: caret, wait until it reports there; select, wait for
+  the range and its text; then check it still holds 30ms on (`STEADY`).
+  Measured after: 15 accepts out of 15 in GTK4, Chrome and Zen starting
+  from the caret at 0, each with the clipboard back as it was; "Correct
+  the sentence" with four fixes in all three; "café😀" through
+  `InsertText` in GTK4.
+- Two layer surfaces on the overlay layer, `gramly-marks` and
+  `gramly-card`. The underline one covers only the field's area (anchored
+  top-left, margins and size), shrinking to 1x1 with nothing to draw, so
+  fullscreen video and games keep direct scanout; it takes no input (an
+  empty input region) and is never unmapped once shown: mapping a layer
+  surface again puts it on top, over the card. The card is mapped and
+  unmapped, so it lands on top each time, and wants no keyboard, so a
+  click on it leaves the field focused.
+- Gramly's stylesheet sits one above the user's (`PRIORITY_USER + 1`). A
+  matugen theme in `~/.config/gtk-4.0/gtk.css` painted every window, the
+  whole-screen underline layer included, a near-opaque grey, and
+  restyled the card's buttons.
+- A wrapping label asks for its whole text on one line as its natural
+  width, and a layer surface takes its natural size: the sentence card ran
+  off its right edge until the label's `max_width_chars` was capped.
+- The fallback walk runs on its own thread, at most three times per change
+  of window or focus. On the main loop, repeated each second, a Zen window
+  with no text field focused (2187 nodes, 0.3s a walk) held the loop up a
+  third of the time.
+- Layer surfaces would fade in and out; Gramly sends Hyprland a layer rule
+  for the `gramly` namespaces with `no_anim` when it starts, over the
+  socket (`dispatch function() hl.layer_rule({...}) end`).
+- The tray is StatusNotifierItem through `ksni` (async-io, blocking API;
+  no tokio). It serves D-Bus on its own thread, so a click only sends a
+  `Command` down a channel that the 50ms tick drains and applies on the GTK
+  thread; the tick pushes `Status` to the tray only when it changed. Spawned
+  with `assume_sni_available`: at login Gramly can start before the shell
+  has a tray host, and the icon should appear when the host does. The
+  per-app and pause titles come from `Status`, shared with the macOS menu.
+- The systemd user unit sets no environment. It needs `WAYLAND_DISPLAY` and
+  `HYPRLAND_INSTANCE_SIGNATURE` in the user manager, which uwsm provides;
+  the installer checks `show-environment` and imports them if missing.
+  stderr is appended to `$XDG_STATE_HOME/gramly/gramly.log` (`%S`), the
+  path "Copy recent log" reads.
+- "Personal dictionary…" opens `dictionary.txt` with `xdg-open`: no list
+  window yet, and so no immediate recheck after an edit; the next text
+  change picks it up.
 
 ## macOS surface
 
@@ -284,16 +451,20 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
   misses the 150ms deadline when busy) was read as focus leaving, and the
   model withdrawing Harper's suggestion closed the card being read. Now a
   field is dropped only after `GRACE` (8) misses in a row, and a withdrawn
-  card stays as `ORPHAN` - accepting still works from `card_fix` - until the
-  pointer leaves. Abnormal closes are logged; `GRAMLY_TRACE=1` logs all.
+  card stays as `ORPHAN` - accepting still works from `card_fix`, but only
+  while its range still reads the words the card showed (`card_words`;
+  "the card's words moved") - until the pointer leaves. Abnormal closes are logged; `GRAMLY_TRACE=1` logs all.
 - Only a non-answer waits out `GRACE`. Focus answered as being elsewhere
-  (`ax::Focus::Elsewhere`), or another app coming forward, drops the field
-  at once: read as misses, a switch to another window left the underlines
-  over it for 400ms. The app in front is checked before any accessibility
-  question, and a tick also runs the moment one is activated
-  (`NSWorkspaceDidActivateApplicationNotification`). The field already
-  being read is recognised by its element before anything is asked of it,
-  so a tick in a field costs one round trip, not five.
+  (`Focus::Elsewhere`), or another app coming forward, drops the field at
+  once: read as misses, a switch to another window left the underlines over
+  it for 400ms. `Host::focus` decides it, before any accessibility question:
+  macOS compares the process in front with the field's, and a tick also runs
+  the moment an app is activated
+  (`NSWorkspaceDidActivateApplicationNotification`); Linux compares the
+  front window's address with the one the field was found in, which
+  Hyprland answers at once. The field already being read is recognised
+  (`Focus::Same`) before anything is asked of it, so a tick in a field
+  costs one round trip, not five.
 - Every app is sent `AXManualAccessibility = true` once when it first comes
   forward (`ax::wake`). Electron and Chromium build no accessibility tree
   without it, which is how Grammarly works in a Claude or Slack text box
@@ -333,7 +504,14 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
   late. Read back at once, the write looked refused and the fix was pasted
   a second time. Both are waited for, up to `SETTLE` (300ms).
 - The paste fallback restores every pasteboard item in every type; saving
-  only the text wiped a copied screenshot.
+  only the text wiped a copied screenshot. It is two-phase like Linux's: the
+  pasteboard is written before the selection, ⌘V sent right after it is
+  confirmed. A fix that only removes text sends Delete over the selection
+  instead (`Paste::delete_selection`, shared with Linux): Slack ignored the
+  empty paste and the comma stayed (log: "the field holds 68 chars,
+  expected 67"). The lab's `removal` case covers it in every field.
+- A second accept inside a second of the first is ignored (`expecting`): it
+  was made against text the first had already moved.
 - A fix never writes over text it has not confirmed. A user saw a whole
   sentence replaced by the correction written twice, not reproducibly:
   an unconfirmed selection (an older, larger one still standing) took the
@@ -351,13 +529,9 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
   input handling. Even with the selection confirmed, a direct write in Zen
   replaced a whole sentence with one word ("Correct the sentence", log:
   "a write could not be confirmed"). Native fields keep the direct write.
-- A removal is a Delete over the confirmed selection, never an empty paste:
-  Slack ignored the empty paste and the comma stayed (log: "the field holds
-  68 chars, expected 67"). The lab's `removal` case covers it in every
-  field.
 - An accepted fix is taken off the page at once and is neither offered nor
-  written again for `ACCEPTED_FOR` (a minute), keyed as a dismissal is (the
-  words before it and the change). Slack reported the new text late; in the
+  written again for `ACCEPTED_FOR` (a minute, in the engine), keyed as a
+  dismissal is (the words before it and the change). Slack reported the new text late; in the
   gap the old text still held the fix, it was offered 0.4s later, accepted
   again, and "new" got two commas. It replaced a log line that only noted
   "an accepted fix is offered again".
@@ -414,7 +588,7 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
   on abbreviations - a smaller group, never a wrong one. Accepting is a
   button, no longer a click on the replacement, which now sits inside the
   sentence.
-- The look is Ink (`theme.rs`, DESIGN.md, `design/`): neutral surfaces,
+- The look is Ink (`surface/theme.rs`, DESIGN.md, `design/`): neutral surfaces,
   ink for the main button, and colour only where it means something: the
   underline, a word going out (red, or blue for clearer wording) and a word
   coming in (green). It replaced Flow's palette, whose green carried every
