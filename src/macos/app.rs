@@ -5,9 +5,8 @@ use crate::macos::ax;
 use crate::macos::dictionary::Dictionary;
 use crate::macos::host::MacHost;
 use crate::macos::overlay::Overlay;
-use crate::surface::{
-    Action, DIALECTS, Engine, Status, TICK, parse_key, recent_log, update_config,
-};
+use crate::surface::menu::{Command, Item, menu};
+use crate::surface::{Action, Engine, Status, TICK, parse_key, recent_log, update_config};
 use gramly_core::Config;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, NSObject, NSObjectProtocol};
@@ -30,13 +29,9 @@ struct State {
     /// What the menu was last drawn from.
     drawn: Option<Status>,
     status: Option<Retained<NSStatusItem>>,
-    menu_status: Option<Retained<NSMenuItem>>,
-    menu_enabled: Option<Retained<NSMenuItem>>,
-    menu_ai: Option<Retained<NSMenuItem>>,
-    menu_access: Option<Retained<NSMenuItem>>,
-    menu_pause: Option<Retained<NSMenuItem>>,
-    menu_app: Option<Retained<NSMenuItem>>,
-    menu_spelling: Vec<Retained<NSMenuItem>>,
+    menu: Option<Retained<NSMenu>>,
+    /// What each drawn item's tag indexes, so one selector serves them all.
+    commands: Vec<Command>,
     /// Built the first time it is opened, then kept.
     dictionary: Option<Dictionary>,
 }
@@ -57,9 +52,9 @@ define_class!(
     impl Controller {
         #[unsafe(method(tick:))]
         fn tick(&self, _timer: &AnyObject) {
-            self.with_state(|state, _| {
+            self.with_state(|state, me| {
                 state.engine.tick();
-                sync_menu(state);
+                sync_menu(state, me);
             });
         }
 
@@ -94,78 +89,14 @@ define_class!(
             self.act(Action::DismissSentence, sender);
         }
 
-        #[unsafe(method(toggleEnabled:))]
-        fn toggle_enabled(&self, _sender: &AnyObject) {
-            update_config(|c| c.enabled = !c.enabled);
-            self.with_state(|state, _| {
-                state.engine.reset();
-                sync_menu(state);
-            });
-        }
-
-        #[unsafe(method(toggleAi:))]
-        fn toggle_ai(&self, _sender: &AnyObject) {
-            update_config(|c| c.ai = !c.ai);
-            self.with_state(|state, _| {
-                state.engine.clear_ai_error();
-                state.engine.reset();
-                sync_menu(state);
-            });
-        }
-
-        #[unsafe(method(setKey:))]
-        fn set_key(&self, _sender: &AnyObject) {
-            ask_for_key(self.mtm());
-            self.with_state(|state, _| {
-                state.engine.clear_ai_error();
-                state.engine.reset();
-                sync_menu(state);
-            });
-        }
-
-        #[unsafe(method(pauseHour:))]
-        fn pause_hour(&self, _sender: &AnyObject) {
-            self.with_state(|state, _| {
-                state.engine.toggle_pause();
-                sync_menu(state);
-            });
-        }
-
-        #[unsafe(method(toggleApp:))]
-        fn toggle_app(&self, _sender: &AnyObject) {
-            self.with_state(|state, _| {
-                state.engine.toggle_app();
-                sync_menu(state);
-            });
-        }
-
-        #[unsafe(method(setSpelling:))]
-        fn set_spelling(&self, sender: &AnyObject) {
-            let Some(&(dialect, _)) = DIALECTS.get(tag(sender)) else {
-                return;
-            };
-            update_config(|c| c.dialect = dialect.into());
-            self.with_state(|state, _| {
-                // Checked again in the new spelling.
-                state.engine.reset();
-                sync_menu(state);
-            });
-        }
-
-        #[unsafe(method(copyLog:))]
-        fn copy_log(&self, _sender: &AnyObject) {
-            copy_recent_log(self.mtm());
-        }
-
-        #[unsafe(method(openDictionary:))]
-        fn open_dictionary(&self, _sender: &AnyObject) {
-            self.with_state(|state, me| {
-                let (target, mtm) = (me.target(), me.mtm());
-                state
-                    .dictionary
-                    .get_or_insert_with(|| Dictionary::new(target, mtm))
-                    .show(target, mtm);
-            });
+        #[unsafe(method(choose:))]
+        fn choose(&self, sender: &AnyObject) {
+            let index = tag(sender);
+            let mut command = None;
+            self.with_state(|state, _| command = state.commands.get(index).copied());
+            if let Some(command) = command {
+                self.run(command);
+            }
         }
 
         #[unsafe(method(addWord:))]
@@ -195,19 +126,6 @@ define_class!(
             });
         }
 
-        #[unsafe(method(grantAccess:))]
-        fn grant_access(&self, _sender: &AnyObject) {
-            ax::trusted(true);
-            let link = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility";
-            if let Some(url) = NSURL::URLWithString(&NSString::from_str(link)) {
-                NSWorkspace::sharedWorkspace().openURL(&url);
-            }
-        }
-
-        #[unsafe(method(quit:))]
-        fn quit(&self, _sender: &AnyObject) {
-            NSApplication::sharedApplication(self.mtm()).terminate(None);
-        }
     }
 );
 
@@ -241,6 +159,39 @@ impl Controller {
         self.with_state(|state, _| state.engine.act(action, tagged));
     }
 
+    fn run(&self, command: Command) {
+        match command {
+            Command::Pause => self.update(Engine::toggle_pause),
+            Command::ToggleApp => self.update(Engine::toggle_app),
+            Command::ToggleAi => self.update(Engine::toggle_ai),
+            Command::SetKey => {
+                ask_for_key(self.mtm());
+                self.update(|engine| {
+                    engine.clear_ai_error();
+                    engine.reset();
+                });
+            }
+            Command::Spelling(index) => self.update(|engine| engine.set_dialect(index)),
+            Command::Dictionary => self.with_state(|state, me| {
+                let (target, mtm) = (me.target(), me.mtm());
+                state
+                    .dictionary
+                    .get_or_insert_with(|| Dictionary::new(target, mtm))
+                    .show(target, mtm);
+            }),
+            Command::CopyLog => copy_recent_log(self.mtm()),
+            Command::GrantAccess => grant_access(),
+            Command::Quit => NSApplication::sharedApplication(self.mtm()).terminate(None),
+        }
+    }
+
+    fn update(&self, change: impl FnOnce(&mut Engine<MacHost, Overlay>)) {
+        self.with_state(|state, me| {
+            change(&mut state.engine);
+            sync_menu(state, me);
+        });
+    }
+
     fn target(&self) -> &AnyObject {
         let object: &NSObject = self.as_super();
         object
@@ -253,39 +204,73 @@ impl Controller {
 }
 
 /// Draws the menu again when what it shows has changed.
-fn sync_menu(state: &mut State) {
+fn sync_menu(state: &mut State, controller: &Controller) {
     let status = state.engine.status();
     if state.drawn.as_ref() == Some(&status) {
         return;
     }
-    if let Some(item) = &state.menu_status {
-        item.setTitle(&NSString::from_str(&status.line));
-    }
-    if let Some(item) = &state.menu_enabled {
-        item.setState(status.enabled as isize);
-    }
-    if let Some(item) = &state.menu_ai {
-        item.setState(status.ai as isize);
-    }
-    if let Some(item) = &state.menu_access {
-        item.setHidden(status.trusted);
-    }
-    if let Some(item) = &state.menu_pause {
-        item.setTitle(&NSString::from_str(status.pause_title()));
-        item.setEnabled(status.enabled);
-    }
-    if let Some(item) = &state.menu_app {
-        let app = status.app_item();
-        item.setHidden(app.is_none());
-        if let Some(app) = app {
-            item.setTitle(&NSString::from_str(&app.title));
-            item.setEnabled(app.enabled);
-        }
-    }
-    for (item, (dialect, _)) in state.menu_spelling.iter().zip(DIALECTS) {
-        item.setState((status.dialect == *dialect) as isize);
+    let Some(bar_menu) = &state.menu else {
+        return;
+    };
+    let (target, mtm) = (controller.target(), controller.mtm());
+    bar_menu.removeAllItems();
+    state.commands.clear();
+    for item in menu(&status) {
+        bar_menu.addItem(&draw(&item, &mut state.commands, target, mtm));
     }
     state.drawn = Some(status);
+}
+
+fn draw(
+    item: &Item,
+    commands: &mut Vec<Command>,
+    target: &AnyObject,
+    mtm: MainThreadMarker,
+) -> Retained<NSMenuItem> {
+    let mut clickable = |label: &str, command: Command| {
+        let key = if command == Command::Quit { "q" } else { "" };
+        let drawn = menu_item(label, Some(sel!(choose:)), key, target, mtm);
+        drawn.setTag(commands.len() as isize);
+        commands.push(command);
+        drawn
+    };
+    match item {
+        Item::Note(label) => menu_item(label, None, "", target, mtm),
+        Item::Separator => NSMenuItem::separatorItem(mtm),
+        Item::Action {
+            label,
+            enabled,
+            command,
+        } => {
+            let drawn = clickable(label, *command);
+            drawn.setEnabled(*enabled);
+            drawn
+        }
+        Item::Check { label, on, command } => {
+            let drawn = clickable(label, *command);
+            drawn.setState(*on as isize);
+            drawn
+        }
+        Item::Submenu { label, items } => {
+            let drawn = menu_item(label, None, "", target, mtm);
+            drawn.setEnabled(true);
+            let submenu = NSMenu::new(mtm);
+            submenu.setAutoenablesItems(false);
+            for item in items {
+                submenu.addItem(&draw(item, commands, target, mtm));
+            }
+            drawn.setSubmenu(Some(&submenu));
+            drawn
+        }
+    }
+}
+
+fn grant_access() {
+    ax::trusted(true);
+    let link = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility";
+    if let Some(url) = NSURL::URLWithString(&NSString::from_str(link)) {
+        NSWorkspace::sharedWorkspace().openURL(&url);
+    }
 }
 
 fn copy_recent_log(mtm: MainThreadMarker) {
@@ -369,7 +354,6 @@ fn menu_item(
 }
 
 fn build_menu(state: &mut State, controller: &Controller, mtm: MainThreadMarker) {
-    let target = controller.target();
     let bar = NSStatusBar::systemStatusBar();
     let item = bar.statusItemWithLength(NSVariableStatusItemLength);
     if let Some(button) = item.button(mtm) {
@@ -389,82 +373,12 @@ fn build_menu(state: &mut State, controller: &Controller, mtm: MainThreadMarker)
         }
     }
 
-    let menu = NSMenu::new(mtm);
-    menu.setAutoenablesItems(false);
-    let status = menu_item("Starting…", None, "", target, mtm);
-    let enabled = menu_item(
-        "Check as I type",
-        Some(sel!(toggleEnabled:)),
-        "",
-        target,
-        mtm,
-    );
-    let pause = menu_item("Pause for an hour", Some(sel!(pauseHour:)), "", target, mtm);
-    let app_item = menu_item(
-        "Turn off in this app",
-        Some(sel!(toggleApp:)),
-        "",
-        target,
-        mtm,
-    );
-    let ai = menu_item("AI suggestions", Some(sel!(toggleAi:)), "", target, mtm);
-    let spelling = menu_item("Spelling", None, "", target, mtm);
-    spelling.setEnabled(true);
-    let choices = NSMenu::new(mtm);
-    choices.setAutoenablesItems(false);
-    let mut spelling_items = Vec::new();
-    for (index, (_, name)) in DIALECTS.iter().enumerate() {
-        let choice = menu_item(name, Some(sel!(setSpelling:)), "", target, mtm);
-        choice.setTag(index as isize);
-        choices.addItem(&choice);
-        spelling_items.push(choice);
-    }
-    spelling.setSubmenu(Some(&choices));
-    let log = menu_item("Copy recent log", Some(sel!(copyLog:)), "", target, mtm);
-    let key = menu_item("OpenRouter key…", Some(sel!(setKey:)), "", target, mtm);
-    let dictionary = menu_item(
-        "Personal dictionary…",
-        Some(sel!(openDictionary:)),
-        "",
-        target,
-        mtm,
-    );
-    let access = menu_item(
-        "Grant Accessibility access…",
-        Some(sel!(grantAccess:)),
-        "",
-        target,
-        mtm,
-    );
-    let about = menu_item(&format!("Gramly {VERSION}"), None, "", target, mtm);
-    let quit = menu_item("Quit Gramly", Some(sel!(quit:)), "q", target, mtm);
-
-    menu.addItem(&status);
-    menu.addItem(&access);
-    menu.addItem(&NSMenuItem::separatorItem(mtm));
-    menu.addItem(&enabled);
-    menu.addItem(&pause);
-    menu.addItem(&app_item);
-    menu.addItem(&NSMenuItem::separatorItem(mtm));
-    menu.addItem(&ai);
-    menu.addItem(&key);
-    menu.addItem(&spelling);
-    menu.addItem(&dictionary);
-    menu.addItem(&NSMenuItem::separatorItem(mtm));
-    menu.addItem(&log);
-    menu.addItem(&about);
-    menu.addItem(&quit);
-    item.setMenu(Some(&menu));
-
+    let bar_menu = NSMenu::new(mtm);
+    bar_menu.setAutoenablesItems(false);
+    item.setMenu(Some(&bar_menu));
     state.status = Some(item);
-    state.menu_status = Some(status);
-    state.menu_enabled = Some(enabled);
-    state.menu_ai = Some(ai);
-    state.menu_access = Some(access);
-    state.menu_pause = Some(pause);
-    state.menu_app = Some(app_item);
-    state.menu_spelling = spelling_items;
-    sync_menu(state);
+    state.menu = Some(bar_menu);
+    sync_menu(state, controller);
 }
 
 /// ⌘V, ⌘C, ⌘X and ⌘A are menu key equivalents, not text-field behaviour: an
@@ -514,13 +428,8 @@ pub fn run() -> anyhow::Result<()> {
         engine: Engine::new(MacHost::new(mtm), Overlay::new(mtm, controller.handle())),
         drawn: None,
         status: None,
-        menu_status: None,
-        menu_enabled: None,
-        menu_ai: None,
-        menu_access: None,
-        menu_pause: None,
-        menu_app: None,
-        menu_spelling: Vec::new(),
+        menu: None,
+        commands: Vec::new(),
         dictionary: None,
     };
     build_menu(&mut state, &controller, mtm);

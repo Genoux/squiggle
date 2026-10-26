@@ -7,7 +7,9 @@ use super::hypr::{self, Window};
 use crate::surface::write::{Paste, Refusal};
 use crate::surface::{self, Host, Point};
 use gramly_core::Config;
-use std::cell::Cell;
+use gtk4::gio::{AppInfo, prelude::AppInfoExt};
+use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -79,6 +81,30 @@ pub struct LinuxHost {
     walked_at: Option<Instant>,
     walks_left: u8,
     walking: Option<Walking>,
+    /// Display names by class: `front` runs every tick and a desktop entry
+    /// lookup reads the disk.
+    names: RefCell<HashMap<String, String>>,
+}
+
+/// The desktop entry's name, else the class's last segment capitalised
+/// ("com.slack.Slack" -> "Slack"), for windows with no entry. gio 0.22 moved
+/// `DesktopAppInfo` to a separate crate, so the entry is found among
+/// `AppInfo::all`, matching its id to the class without regard to case.
+fn display_name(class: &str) -> String {
+    let wanted = format!("{class}.desktop");
+    AppInfo::all()
+        .into_iter()
+        .find(|info| info.id().is_some_and(|id| id.eq_ignore_ascii_case(&wanted)))
+        .map_or_else(|| fallback_name(class), |info| info.name().to_string())
+}
+
+fn fallback_name(class: &str) -> String {
+    let last = class.rsplit('.').next().unwrap_or(class);
+    let mut letters = last.chars();
+    letters
+        .next()
+        .map(|first| first.to_uppercase().chain(letters).collect())
+        .unwrap_or_default()
 }
 
 impl LinuxHost {
@@ -94,6 +120,7 @@ impl LinuxHost {
             walked_at: None,
             walks_left: WALKS,
             walking: None,
+            names: RefCell::default(),
         }
     }
 
@@ -168,11 +195,17 @@ impl Host for LinuxHost {
         true
     }
 
-    /// The class is both: Hyprland has no stable app id apart from it, and
-    /// `off_in` holds what this returns.
+    /// The class is the id: Hyprland has no stable app id apart from it, and
+    /// `off_in` holds it. The name is only for the menu.
     fn front(&self) -> Option<(String, String)> {
         let class = hypr::active_window()?.class;
-        Some((class.clone(), class))
+        let name = self
+            .names
+            .borrow_mut()
+            .entry(class.clone())
+            .or_insert_with(|| display_name(&class))
+            .clone();
+        Some((class, name))
     }
 
     fn terminal(&self, id: &str) -> bool {
@@ -271,6 +304,13 @@ impl Paste for LinuxHost {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_class_with_no_entry_is_named_by_its_last_segment() {
+        assert_eq!(fallback_name("com.slack.Slack"), "Slack");
+        assert_eq!(fallback_name("orca"), "Orca");
+        assert_eq!(fallback_name(""), "");
+    }
 
     #[test]
     fn dropping_a_walk_cancels_it() {

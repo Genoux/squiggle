@@ -4,7 +4,7 @@
 //! same code, in an off-screen window.
 
 use crate::macos::dictionary::Dictionary;
-use crate::macos::overlay::{self, SHADE};
+use crate::macos::overlay;
 use crate::macos::theme;
 use crate::surface::card;
 use anyhow::{Context, Result, anyhow};
@@ -156,8 +156,10 @@ pub fn run(args: &[String]) -> Result<()> {
             let host = backdrop(shade.frame().size, ground, mtm);
             shade.setFrameOrigin(CGPoint::new(MARGIN, MARGIN));
             host.addSubview(&shade);
-            card.view
-                .setFrameOrigin(CGPoint::new(MARGIN + SHADE.0, MARGIN + SHADE.3));
+            card.view.setFrameOrigin(CGPoint::new(
+                MARGIN + theme::SHADE.0,
+                MARGIN + theme::SHADE.3,
+            ));
             host.addSubview(&card.view);
             save(&host, &dir.join(format!("{file}-{mode}.png")), mtm)?;
         }

@@ -15,9 +15,13 @@
 //! deliberate: the card fades in (`fade_in`), with an explicit animation.
 
 use crate::macos::primary_height;
-use crate::macos::theme::{self, Palette, Rgba, Weight};
+use crate::macos::theme::{
+    self, ABOVE_BUTTONS, BETWEEN_BUTTONS, BUTTON_HEIGHT, BUTTON_OUTLINE, BUTTON_SIDE, CARD_PAD,
+    CARD_RISE, CARD_TITLE, CARD_WIDTH, DOT, EDGE_WIDTH, Face, NEW_WORD_PAD, NEW_WORDS, Palette,
+    Rgba, SENTENCE, SENTENCE_LINE, SHADE, SHADOW_SOFT, SHADOW_TIGHT, Shadow, TITLE_INDENT,
+    TITLE_LINE, UNDER_TITLE, UNDERLINE_BLEED, UNDERLINE_HEIGHT, UNDERLINE_OFFSET,
+};
 use crate::surface::{self, Action, Bit, Card, Mark, Point, Rect, place_card};
-use gramly_core::Kind;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, Bool, Sel};
 use objc2::{AnyThread, MainThreadMarker, MainThreadOnly, sel};
@@ -130,10 +134,6 @@ fn layer_view(frame: CGRect, mtm: MainThreadMarker) -> Retained<NSView> {
     view
 }
 
-fn with_alpha(c: Rgba, a: f64) -> Rgba {
-    Rgba { a, ..c }
-}
-
 pub struct Overlay {
     mtm: MainThreadMarker,
     /// What the card's buttons send their clicks to. The controller owns the
@@ -195,34 +195,26 @@ impl surface::Overlay for Overlay {
                 let rect = to_cocoa(mark.rect, self.mtm);
                 let x = rect.origin.x - area.origin.x;
                 let y = rect.origin.y - area.origin.y;
-                let color = theme::kind(mark.kind);
-                let fill = if mark.flash {
-                    Some(theme::ACCEPTED)
-                } else if mark.highlighted {
-                    Some(with_alpha(color, HOVER_FILL))
-                } else {
-                    None
-                };
-                if let Some(fill) = fill {
+                if let Some(fill) = theme::mark_fill(mark) {
                     let layer = CALayer::new();
                     layer.setFrame(CGRect::new(
-                        CGPoint::new(x - 1.0, y),
-                        CGSize::new(rect.size.width + 2.0, rect.size.height),
+                        CGPoint::new(x - UNDERLINE_BLEED, y),
+                        CGSize::new(rect.size.width + UNDERLINE_BLEED * 2.0, rect.size.height),
                     ));
                     layer.setBackgroundColor(Some(&theme::cg(fill)));
                     layer.setCornerRadius(theme::CORNER_INLINE);
                     root.addSublayer(&layer);
                 }
-                if mark.flash {
+                let Some(color) = theme::mark_line(mark) else {
                     continue;
-                }
+                };
                 let line = CALayer::new();
                 line.setFrame(CGRect::new(
-                    CGPoint::new(x, y - 1.0),
-                    CGSize::new(rect.size.width, 2.0),
+                    CGPoint::new(x, y - UNDERLINE_OFFSET),
+                    CGSize::new(rect.size.width, UNDERLINE_HEIGHT),
                 ));
                 line.setBackgroundColor(Some(&theme::cg(color)));
-                line.setCornerRadius(1.0);
+                line.setCornerRadius(UNDERLINE_HEIGHT / 2.0);
                 root.addSublayer(&line);
             }
         });
@@ -292,9 +284,9 @@ impl surface::Overlay for Overlay {
         // Settling towards its word: down onto a card below it, up onto
         // one above.
         let from = if frame.y >= word.y + word.h {
-            RISE
+            CARD_RISE
         } else {
-            -RISE
+            -CARD_RISE
         };
         fade_in(&shade, from);
         fade_in(&built.view, from);
@@ -315,9 +307,7 @@ impl surface::Overlay for Overlay {
 
     /// Lights the button under the pointer. Driven by the same poll as the
     /// underlines: the card never becomes key, so it gets no tracking-area
-    /// events of its own. The fade is short - long enough to read as a
-    /// response, short enough that sweeping across the buttons does not
-    /// trail.
+    /// events of its own.
     fn hover(&mut self, pointer: Point) {
         if !self.card.isVisible() {
             return;
@@ -335,7 +325,7 @@ impl surface::Overlay for Overlay {
             return;
         }
         CATransaction::begin();
-        CATransaction::setAnimationDuration(0.1);
+        CATransaction::setAnimationDuration(theme::HOVER_FADE.as_secs_f64());
         for (i, row) in self.rows.iter().enumerate() {
             row.light(Some(i) == now);
         }
@@ -343,11 +333,6 @@ impl surface::Overlay for Overlay {
         self.lit = now;
     }
 }
-
-/// The card's one motion: it fades in over `FADE` seconds, moving its last
-/// `RISE` points towards its word.
-const FADE: f64 = 0.14;
-const RISE: f64 = 3.0;
 
 /// The card's fade, moving from `from` (up positive). Explicit, so the
 /// transactions that keep everything else still do not stop it.
@@ -365,7 +350,7 @@ fn fade_in(view: &NSView, from: f64) {
         if path == "opacity" {
             unsafe { animation.setToValue(Some(&NSNumber::new_f64(1.0))) };
         }
-        animation.setDuration(FADE);
+        animation.setDuration(theme::CARD_FADE.as_secs_f64());
         animation.setTimingFunction(Some(&ease));
         layer.addAnimation_forKey(&animation, Some(&NSString::from_str(path)));
     }
@@ -398,19 +383,9 @@ impl Row {
     }
 }
 
-/// Every button: 32 high, 6 corners, 12 at the sides.
-const BUTTON_H: f64 = 32.0;
-const BUTTON_SIDE: f64 = 12.0;
-
-fn label(
-    text: &str,
-    size: f64,
-    weight: Weight,
-    color: Rgba,
-    mtm: MainThreadMarker,
-) -> Retained<NSTextField> {
+fn label(text: &str, face: Face, color: Rgba, mtm: MainThreadMarker) -> Retained<NSTextField> {
     let label = NSTextField::labelWithString(&NSString::from_str(text), mtm);
-    label.setFont(Some(&theme::font(size, weight)));
+    label.setFont(Some(&theme::font(face.size, face.weight)));
     label.setTextColor(Some(&theme::ns(color)));
     label.setLineBreakMode(NSLineBreakMode::ByTruncatingTail);
     label
@@ -431,18 +406,18 @@ fn button(
     mtm: MainThreadMarker,
 ) -> Row {
     let caption = if primary {
-        label(words, 13.5, Weight::Semibold, p.on_ink, mtm)
+        label(words, theme::BUTTON_MAIN, p.on_ink, mtm)
     } else {
-        label(words, 13.5, Weight::Medium, p.text, mtm)
+        label(words, theme::BUTTON, p.text, mtm)
     };
     let fit = caption.fittingSize();
     let width = fit.width.ceil() + BUTTON_SIDE * 2.0;
     let view = layer_view(
-        CGRect::new(CGPoint::new(x, y), CGSize::new(width, BUTTON_H)),
+        CGRect::new(CGPoint::new(x, y), CGSize::new(width, BUTTON_HEIGHT)),
         mtm,
     );
     caption.setFrame(CGRect::new(
-        CGPoint::new(BUTTON_SIDE, ((BUTTON_H - fit.height) / 2.0).round()),
+        CGPoint::new(BUTTON_SIDE, ((BUTTON_HEIGHT - fit.height) / 2.0).round()),
         CGSize::new(fit.width.ceil(), fit.height),
     ));
     view.addSubview(&caption);
@@ -462,7 +437,7 @@ fn button(
         if let Some(layer) = row.view.layer() {
             layer.setCornerRadius(theme::CORNER_CONTROL);
             if line.is_some() {
-                layer.setBorderWidth(1.0);
+                layer.setBorderWidth(BUTTON_OUTLINE);
             }
         }
         row.light(false);
@@ -507,18 +482,6 @@ fn selector(action: Action) -> Sel {
     }
 }
 
-/// Space around the card's content.
-const PAD: f64 = 16.0;
-/// The card's width, the same for every suggestion.
-const WIDTH: f64 = 340.0;
-/// Between the title and the sentence, and between the sentence and the
-/// buttons.
-const UNDER_TITLE: f64 = 10.0;
-const ABOVE_BUTTONS: f64 = 16.0;
-const BETWEEN: f64 = 8.0;
-/// The title's line.
-const TITLE_H: f64 = 18.0;
-
 pub(crate) struct Built {
     pub view: Retained<NSView>,
     rows: Vec<Row>,
@@ -534,18 +497,14 @@ pub(crate) fn build(
 ) -> Built {
     let tag = index as isize;
     let dot = theme::kind(content.kind);
-    let inner = WIDTH - PAD * 2.0;
-    let gone = if content.kind == Kind::Clarity {
-        p.gone_advice
-    } else {
-        p.gone
-    };
+    let inner = theme::CARD_WIDTH - theme::CARD_PAD * 2.0;
+    let gone = theme::gone(p, content.kind);
     let (sentence, sentence_h) = sentence_view(&content.bits, inner, gone, p, mtm);
 
     // Buttons left to right, wrapping in the rare case they do not fit.
     let mut placed: Vec<(Row, usize)> = Vec::new();
     let mut line = 0;
-    let mut x = PAD;
+    let mut x = CARD_PAD;
     for (i, &action) in content.actions.iter().enumerate() {
         let row = button(
             action.label(),
@@ -560,65 +519,65 @@ pub(crate) fn build(
             mtm,
         );
         let w = row.view.frame().size.width;
-        if x > PAD && x + w > WIDTH - PAD {
+        if x > CARD_PAD && x + w > CARD_WIDTH - CARD_PAD {
             line += 1;
-            x = PAD;
+            x = CARD_PAD;
         }
         row.view.setFrameOrigin(CGPoint::new(x, 0.0));
-        x += w + BETWEEN;
+        x += w + BETWEEN_BUTTONS;
         placed.push((row, line));
     }
     let lines = (line + 1) as f64;
-    let buttons_h = lines * BUTTON_H + (lines - 1.0) * BETWEEN;
-    let height = PAD + TITLE_H + UNDER_TITLE + sentence_h + ABOVE_BUTTONS + buttons_h + PAD;
+    let buttons_h = lines * BUTTON_HEIGHT + (lines - 1.0) * BETWEEN_BUTTONS;
+    let height =
+        CARD_PAD + TITLE_LINE + UNDER_TITLE + sentence_h + ABOVE_BUTTONS + buttons_h + CARD_PAD;
 
     let view = layer_view(
-        CGRect::new(CGPoint::new(0.0, 0.0), CGSize::new(WIDTH, height)),
+        CGRect::new(CGPoint::new(0.0, 0.0), CGSize::new(CARD_WIDTH, height)),
         mtm,
     );
     still(|| {
         if let Some(layer) = view.layer() {
             layer.setBackgroundColor(Some(&theme::cg(p.surface)));
             layer.setCornerRadius(theme::CORNER);
-            // A hairline, not a border: half a point is one pixel on a
-            // Retina screen.
-            layer.setBorderWidth(0.5);
+            layer.setBorderWidth(EDGE_WIDTH);
             layer.setBorderColor(Some(&theme::cg(p.edge)));
         }
     });
 
-    let mut top = height - PAD;
+    let mut top = height - CARD_PAD;
     let marker = layer_view(
         CGRect::new(
-            CGPoint::new(PAD, top - TITLE_H / 2.0 - 3.5),
-            CGSize::new(7.0, 7.0),
+            CGPoint::new(CARD_PAD, top - TITLE_LINE / 2.0 - DOT / 2.0),
+            CGSize::new(DOT, DOT),
         ),
         mtm,
     );
     still(|| {
         if let Some(layer) = marker.layer() {
             layer.setBackgroundColor(Some(&theme::cg(dot)));
-            layer.setCornerRadius(3.5);
+            layer.setCornerRadius(DOT / 2.0);
         }
     });
     view.addSubview(&marker);
-    let heading = label(&content.title, 13.0, Weight::Medium, p.text2, mtm);
+    let heading = label(&content.title, CARD_TITLE, p.text2, mtm);
     let heading_h = heading.fittingSize().height;
     heading.setFrame(CGRect::new(
         CGPoint::new(
-            PAD + 15.0,
-            top - TITLE_H + ((TITLE_H - heading_h) / 2.0).round(),
+            CARD_PAD + TITLE_INDENT,
+            top - TITLE_LINE + ((TITLE_LINE - heading_h) / 2.0).round(),
         ),
-        CGSize::new(inner - 15.0, heading_h),
+        CGSize::new(inner - TITLE_INDENT, heading_h),
     ));
     view.addSubview(&heading);
-    top -= TITLE_H + UNDER_TITLE + sentence_h;
-    sentence.setFrameOrigin(CGPoint::new(PAD, top));
+    top -= TITLE_LINE + UNDER_TITLE + sentence_h;
+    sentence.setFrameOrigin(CGPoint::new(CARD_PAD, top));
     view.addSubview(&sentence);
 
     let mut rows = Vec::new();
     for (row, line) in placed {
-        let y = PAD + buttons_h - BUTTON_H - line as f64 * (BUTTON_H + BETWEEN);
+        let y =
+            CARD_PAD + buttons_h - BUTTON_HEIGHT - line as f64 * (BUTTON_HEIGHT + BETWEEN_BUTTONS);
         row.view
             .setFrameOrigin(CGPoint::new(row.view.frame().origin.x, y));
         view.addSubview(&row.view);
@@ -626,18 +585,6 @@ pub(crate) fn build(
     }
     Built { view, rows }
 }
-
-/// How far the shadow reaches past the card: left, right, top, bottom.
-pub(crate) const SHADE: (f64, f64, f64, f64) = (40.0, 40.0, 24.0, 64.0);
-
-/// Behind a word whose card is open, its underline's colour at this alpha.
-const HOVER_FILL: f64 = 0.16;
-
-/// The card's two shadows as (inset, drop, blur, share of the palette's
-/// strength): a tight one at its edge and a soft one below. The soft one
-/// dropped 18 with a 22 blur, and the card floated like a bubble.
-const SHADOW_TIGHT: (f64, f64, f64, f32) = (0.0, 1.0, 2.0, 0.4);
-const SHADOW_SOFT: (f64, f64, f64, f32) = (12.0, 14.0, 18.0, 1.0);
 
 /// The card's shadow, drawn from paths so nothing else is painted.
 pub(crate) fn shade(size: CGSize, p: &Palette, mtm: MainThreadMarker) -> Retained<NSView> {
@@ -656,8 +603,14 @@ pub(crate) fn shade(size: CGSize, p: &Palette, mtm: MainThreadMarker) -> Retaine
         let Some(root) = view.layer() else {
             return;
         };
-        for (inset, drop, blur, share) in [SHADOW_TIGHT, SHADOW_SOFT] {
-            let strength = p.shadow * share;
+        for Shadow {
+            inset,
+            drop,
+            blur,
+            share,
+        } in [SHADOW_TIGHT, SHADOW_SOFT]
+        {
+            let strength = (f64::from(p.shadow) * share) as f32;
             let layer = CALayer::new();
             layer.setFrame(view.bounds());
             let shape = CGRect::new(
@@ -686,13 +639,6 @@ pub(crate) fn shade(size: CGSize, p: &Palette, mtm: MainThreadMarker) -> Retaine
     view
 }
 
-/// The sentence's line height, and its type size.
-const LINE: f64 = 24.0;
-const TEXT: f64 = 15.0;
-/// A no-break space either side of a new word, so its fill has room to
-/// breathe without touching the letters beside it.
-const PADDING: char = '\u{202F}';
-
 /// The sentence, laid out `width` wide, over the fills of its new words.
 /// Struck words take `gone`. Each word has its colour in one place: letters
 /// and line in red, or green letters on their fill. Red letters under a
@@ -705,15 +651,15 @@ fn sentence_view(
     p: &Palette,
     mtm: MainThreadMarker,
 ) -> (Retained<NSView>, f64) {
-    let regular = theme::font(TEXT, Weight::Regular);
-    let bold = theme::font(TEXT, Weight::Semibold);
+    let regular = theme::font(SENTENCE.size, SENTENCE.weight);
+    let bold = theme::font(NEW_WORDS.size, NEW_WORDS.weight);
     // Centred in its 24pt line: fixed line heights put the extra room above
     // the letters.
     let natural = regular.ascender() - regular.descender();
-    let raise = ((LINE - natural) / 2.0).max(0.0);
+    let raise = ((SENTENCE_LINE - natural) / 2.0).max(0.0);
     let style = NSMutableParagraphStyle::new();
-    style.setMinimumLineHeight(LINE);
-    style.setMaximumLineHeight(LINE);
+    style.setMinimumLineHeight(SENTENCE_LINE);
+    style.setMaximumLineHeight(SENTENCE_LINE);
 
     let text = NSMutableAttributedString::new();
     let mut fills: Vec<NSRange> = Vec::new();
@@ -721,7 +667,12 @@ fn sentence_view(
         let (shown, font, color, struck) = match bit {
             Bit::Same(s) => (s.clone(), &regular, p.text, false),
             Bit::Gone(s) => (s.clone(), &regular, gone, true),
-            Bit::New(s) => (format!("{PADDING}{s}{PADDING}"), &bold, p.new, false),
+            Bit::New(s) => (
+                format!("{NEW_WORD_PAD}{s}{NEW_WORD_PAD}"),
+                &bold,
+                p.new,
+                false,
+            ),
         };
         let start = text.length();
         text.appendAttributedString(&run(&shown, font, color, struck, raise, &style));
@@ -740,7 +691,7 @@ fn sentence_view(
     storage.addLayoutManager(&layout);
     layout.ensureLayoutForTextContainer(&container);
     let used = layout.usedRectForTextContainer(&container);
-    let height = used.size.height.ceil().max(LINE);
+    let height = used.size.height.ceil().max(SENTENCE_LINE);
 
     let frame = CGRect::new(CGPoint::new(0.0, 0.0), CGSize::new(width, height));
     let view = NSView::initWithFrame(NSView::alloc(mtm), frame);
@@ -763,7 +714,7 @@ fn sentence_view(
             &collect,
         );
     }
-    let fill_h = (natural + 5.0).min(LINE - 1.0).round();
+    let fill_h = theme::new_word_fill_height(natural);
     still(|| {
         if let Some(root) = backdrop.layer() {
             for rect in rects.borrow().iter() {
@@ -825,46 +776,5 @@ fn run(
             &NSString::from_str(text),
             Some(&attributes),
         )
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::surface::card;
-
-    #[test]
-    fn measures_match_the_tokens() {
-        use crate::macos::theme::tokens::{load, num};
-        let t = load();
-        for (path, ours) in [
-            ("card.width", WIDTH),
-            ("card.padding", PAD),
-            ("card.under_title", UNDER_TITLE),
-            ("card.above_buttons", ABOVE_BUTTONS),
-            ("card.between_buttons", BETWEEN),
-            ("card.context_words", card::CONTEXT as f64),
-            ("button.height", BUTTON_H),
-            ("button.side", BUTTON_SIDE),
-            ("type.sentence.size", TEXT),
-            ("type.sentence.line", LINE),
-            ("underline.hover_fill", HOVER_FILL),
-            ("shadow.tight.inset", SHADOW_TIGHT.0),
-            ("shadow.tight.drop", SHADOW_TIGHT.1),
-            ("shadow.tight.blur", SHADOW_TIGHT.2),
-            ("shadow.tight.share", f64::from(SHADOW_TIGHT.3)),
-            ("shadow.soft.inset", SHADOW_SOFT.0),
-            ("shadow.soft.drop", SHADOW_SOFT.1),
-            ("shadow.soft.blur", SHADOW_SOFT.2),
-            ("shadow.soft.share", f64::from(SHADOW_SOFT.3)),
-            ("motion.card_fade_ms", FADE * 1000.0),
-            ("motion.card_rise", RISE),
-        ] {
-            let theirs = num(&t, path);
-            assert!(
-                (ours - theirs).abs() < 1e-6,
-                "{path}: {ours} here, {theirs} in tokens.json"
-            );
-        }
     }
 }

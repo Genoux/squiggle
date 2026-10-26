@@ -1,25 +1,13 @@
-//! The tray icon and its menu, over StatusNotifierItem. ksni serves D-Bus on
-//! its own thread, so a click only sends a [`Command`]; the GTK main loop
-//! applies it, and the engine is never touched from here.
+//! The tray icon, over StatusNotifierItem, drawing `surface::menu`. ksni
+//! serves D-Bus on its own thread, so a click only sends a [`Command`]; the
+//! GTK main loop applies it, and the engine is never touched from here.
 
-use crate::surface::{DIALECTS, Status};
+use crate::surface::Status;
+use crate::surface::menu::{Command, Item, menu};
 use ksni::blocking::{Handle, TrayMethods};
-use ksni::menu::{CheckmarkItem, RadioGroup, RadioItem, StandardItem, SubMenu};
+use ksni::menu::{CheckmarkItem, StandardItem, SubMenu};
 use ksni::{MenuItem, Tray};
 use std::sync::mpsc::Sender;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Command {
-    ToggleEnabled,
-    Pause,
-    ToggleApp,
-    ToggleAi,
-    SetKey,
-    Spelling(usize),
-    Dictionary,
-    CopyLog,
-    Quit,
-}
 
 pub struct GramlyTray {
     status: Status,
@@ -35,67 +23,45 @@ fn send(command: Command) -> Action {
     })
 }
 
-fn plain(label: impl Into<String>, enabled: bool, command: Command) -> MenuItem<GramlyTray> {
-    StandardItem {
-        label: label.into(),
-        enabled,
-        activate: send(command),
-        ..Default::default()
+fn render(item: Item) -> MenuItem<GramlyTray> {
+    match item {
+        Item::Note(label) => StandardItem {
+            label,
+            enabled: false,
+            ..Default::default()
+        }
+        .into(),
+        Item::Separator => MenuItem::Separator,
+        Item::Action {
+            label,
+            enabled,
+            command,
+        } => StandardItem {
+            label,
+            enabled,
+            activate: send(command),
+            ..Default::default()
+        }
+        .into(),
+        Item::Check { label, on, command } => CheckmarkItem {
+            label,
+            checked: on,
+            activate: send(command),
+            ..Default::default()
+        }
+        .into(),
+        Item::Submenu { label, items } => SubMenu {
+            label,
+            submenu: items.into_iter().map(render).collect(),
+            ..Default::default()
+        }
+        .into(),
     }
-    .into()
-}
-
-fn note(label: impl Into<String>) -> MenuItem<GramlyTray> {
-    StandardItem {
-        label: label.into(),
-        enabled: false,
-        ..Default::default()
-    }
-    .into()
-}
-
-fn checkmark(label: &str, checked: bool, command: Command) -> MenuItem<GramlyTray> {
-    CheckmarkItem {
-        label: label.into(),
-        checked,
-        activate: send(command),
-        ..Default::default()
-    }
-    .into()
 }
 
 impl GramlyTray {
     fn new(status: Status, commands: Sender<Command>) -> Self {
         Self { status, commands }
-    }
-
-    fn spelling(&self) -> MenuItem<Self> {
-        let commands = self.commands.clone();
-        let current = DIALECTS
-            .iter()
-            .position(|(dialect, _)| *dialect == self.status.dialect)
-            .unwrap_or(0);
-        SubMenu {
-            label: "Spelling".into(),
-            submenu: vec![
-                RadioGroup {
-                    selected: current,
-                    select: Box::new(move |_, index| {
-                        let _ = commands.send(Command::Spelling(index));
-                    }),
-                    options: DIALECTS
-                        .iter()
-                        .map(|(_, name)| RadioItem {
-                            label: (*name).into(),
-                            ..Default::default()
-                        })
-                        .collect(),
-                }
-                .into(),
-            ],
-            ..Default::default()
-        }
-        .into()
     }
 }
 
@@ -115,33 +81,7 @@ impl Tray for GramlyTray {
     }
 
     fn menu(&self) -> Vec<MenuItem<Self>> {
-        let status = &self.status;
-        let app = status.app_item();
-        vec![
-            note(&status.line),
-            MenuItem::Separator,
-            checkmark("Check as I type", status.enabled, Command::ToggleEnabled),
-            plain(status.pause_title(), status.enabled, Command::Pause),
-            StandardItem {
-                label: app
-                    .as_ref()
-                    .map_or_else(String::new, |app| app.title.clone()),
-                enabled: app.as_ref().is_some_and(|app| app.enabled),
-                visible: app.is_some(),
-                activate: send(Command::ToggleApp),
-                ..Default::default()
-            }
-            .into(),
-            MenuItem::Separator,
-            checkmark("AI suggestions", status.ai, Command::ToggleAi),
-            plain("OpenRouter key…", true, Command::SetKey),
-            self.spelling(),
-            plain("Personal dictionary…", true, Command::Dictionary),
-            MenuItem::Separator,
-            plain("Copy recent log", true, Command::CopyLog),
-            note(concat!("Gramly ", env!("CARGO_PKG_VERSION"))),
-            plain("Quit Gramly", true, Command::Quit),
-        ]
+        menu(&self.status).into_iter().map(render).collect()
     }
 }
 
@@ -166,94 +106,85 @@ pub fn spawn(status: Status, commands: Sender<Command>) -> anyhow::Result<TrayHa
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::surface::Status;
-    use ksni::{Tray, menu::MenuItem};
     use std::sync::mpsc;
 
     fn status() -> Status {
         Status {
-            line: "Checking on this computer only".into(),
+            line: "Gramly is on".into(),
             trusted: true,
-            enabled: true,
             ai: false,
             paused: false,
-            front: Some(("firefox".into(), "firefox".into())),
+            front: Some(("firefox".into(), "Firefox".into())),
             off_here: false,
             terminal: false,
             dialect: "british".into(),
         }
     }
 
-    fn tray(status: Status) -> (GramlyTray, mpsc::Receiver<Command>) {
+    fn tray() -> (GramlyTray, mpsc::Receiver<Command>) {
         let (sender, commands) = mpsc::channel();
-        (GramlyTray::new(status, sender), commands)
+        (GramlyTray::new(status(), sender), commands)
     }
 
-    fn labels(tray: &GramlyTray) -> Vec<String> {
-        tray.menu()
-            .iter()
-            .filter_map(|item| match item {
-                MenuItem::Standard(item) if item.visible => Some(item.label.clone()),
-                MenuItem::Checkmark(item) => Some(item.label.clone()),
-                MenuItem::SubMenu(item) => Some(item.label.clone()),
-                _ => None,
-            })
-            .collect()
+    fn label(item: &MenuItem<GramlyTray>) -> Option<&str> {
+        match item {
+            MenuItem::Standard(item) => Some(&item.label),
+            MenuItem::Checkmark(item) => Some(&item.label),
+            MenuItem::SubMenu(item) => Some(&item.label),
+            _ => None,
+        }
     }
 
     #[test]
-    fn the_menu_has_the_macos_items_in_order_and_no_access_item() {
-        let (tray, _) = tray(status());
+    fn the_tray_draws_the_shared_menu_in_order() {
+        let (tray, _) = tray();
+        let drawn = tray.menu();
+        let shared = menu(&status());
+        assert_eq!(drawn.len(), shared.len());
+        let drawn_separators: Vec<bool> = drawn
+            .iter()
+            .map(|item| matches!(item, MenuItem::Separator))
+            .collect();
+        let shared_separators: Vec<bool> =
+            shared.iter().map(|item| *item == Item::Separator).collect();
+        assert_eq!(drawn_separators, shared_separators);
+        let names: Vec<&str> = drawn.iter().filter_map(label).collect();
+        assert_eq!(names[0], "Gramly is on");
+        assert_eq!(names[1], "Pause for an hour");
+        assert_eq!(names[2], "Turn off in Firefox");
         assert_eq!(
-            labels(&tray),
-            [
-                "Checking on this computer only",
-                "Check as I type",
-                "Pause for an hour",
-                "Turn off in firefox",
-                "AI suggestions",
-                "OpenRouter key…",
-                "Spelling",
-                "Personal dictionary…",
-                "Copy recent log",
-                concat!("Gramly ", env!("CARGO_PKG_VERSION")),
-                "Quit Gramly",
-            ]
+            names.last(),
+            Some(&concat!("Quit Gramly ", env!("CARGO_PKG_VERSION")))
         );
     }
 
     #[test]
-    fn the_app_item_is_hidden_with_no_app_in_front() {
-        let (tray, _) = tray(Status {
-            front: None,
-            ..status()
-        });
-        assert!(!labels(&tray).iter().any(|label| label.contains("Turn")));
-    }
-
-    #[test]
-    fn pause_follows_the_status() {
-        let (tray, _) = tray(Status {
-            paused: true,
-            enabled: false,
-            ..status()
-        });
+    fn the_note_is_disabled() {
+        let (tray, _) = tray();
         let menu = tray.menu();
-        let MenuItem::Standard(pause) = menu
-            .iter()
-            .find(
-                |item| matches!(item, MenuItem::Standard(item) if item.label == "Resume checking"),
-            )
-            .expect("pause says resume")
-        else {
-            unreachable!();
+        let MenuItem::Standard(note) = &menu[0] else {
+            panic!("the status line is a standard item");
         };
-        assert!(!pause.enabled);
+        assert!(!note.enabled);
     }
 
     #[test]
-    fn spelling_selects_the_current_dialect() {
-        let (tray, _) = tray(status());
+    fn clicking_an_item_sends_its_command() {
+        let (mut tray, commands) = tray();
+        let menu = tray.menu();
+        let Some(MenuItem::Checkmark(ai)) = menu
+            .iter()
+            .find(|item| label(item) == Some("AI suggestions"))
+        else {
+            panic!("AI suggestions is a checkmark");
+        };
+        (ai.activate)(&mut tray);
+        assert_eq!(commands.try_recv(), Ok(Command::ToggleAi));
+    }
+
+    #[test]
+    fn the_spelling_submenu_is_rendered_with_its_choices() {
+        let (tray, _) = tray();
         let menu = tray.menu();
         let Some(MenuItem::SubMenu(spelling)) = menu
             .iter()
@@ -261,23 +192,6 @@ mod tests {
         else {
             panic!("no spelling submenu");
         };
-        let MenuItem::RadioGroup(group) = &spelling.submenu[0] else {
-            panic!("spelling is a radio group");
-        };
-        assert_eq!(group.selected, 1);
-        assert_eq!(group.options.len(), crate::surface::DIALECTS.len());
-    }
-
-    #[test]
-    fn clicking_an_item_sends_its_command() {
-        let (mut tray, commands) = tray(status());
-        let menu = tray.menu();
-        let Some(MenuItem::Checkmark(enabled)) = menu.iter().find(
-            |item| matches!(item, MenuItem::Checkmark(item) if item.label == "Check as I type"),
-        ) else {
-            panic!("check as I type is a checkmark");
-        };
-        (enabled.activate)(&mut tray);
-        assert_eq!(commands.try_recv(), Ok(Command::ToggleEnabled));
+        assert_eq!(spelling.submenu.len(), crate::surface::DIALECTS.len());
     }
 }

@@ -15,7 +15,7 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
   platform: the run loop (`engine/`), what a card says (`card.rs`), where it
   goes and when the pointer has left it (`geometry.rs`, y down from the
   top-left as Accessibility and Hyprland report), writing a fix into a field
-  (`write.rs`) and the Ink palette's values (`theme.rs`). A platform gives
+  (`write.rs`) and every Ink value, colour and measure (`theme.rs`). A platform gives
   it a `Host`, a `Field` and an `Overlay` and nothing else; logic that
   exists in both is a bug.
 - `src/macos` is the first platform: Accessibility in (`ax.rs`), panels out
@@ -26,9 +26,9 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
 - `src/linux` is the Hyprland surface: AT-SPI in (`atspi.rs`), Hyprland's
   IPC for where windows are (`hypr.rs`). Hyprland only: Wayland tells no
   client where a window or the pointer is, and Hyprland's socket does;
-  GNOME has no layer-shell to draw an overlay with at all. Its card is
-  still Flow's palette; it takes the Ink look from `surface/theme.rs` and
-  `design/tokens.json` when it gets one.
+  GNOME has no layer-shell to draw an overlay with at all. It draws Ink
+  from `surface/theme.rs`: its stylesheet (`card::css`) is built from those
+  values, so there is no second copy to drift.
 - `design/` is the design system: `index.html` shows every token and
   component, `tokens.json` holds the values for the code and for the Linux
   surface. It lives in the repo because the repo is private and the page must
@@ -208,6 +208,19 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
 - "Turn off in <app>" stores bundle ids in `off_in`, checked against the
   app in front each tick; "Pause for an hour" lives in memory only, so a
   restart is a fresh start. Both show in the menu's status line.
+- The menu is decided once, in `surface/menu.rs`: `menu(&Status)` returns
+  the items, their order, labels and enabled states, and each platform only
+  draws them and sends the clicked `Command` back. The two menus had drifted
+  (a "Check as I type" the Linux tray ordered differently, a version line of
+  its own) because each listed its own items. macOS rebuilds the NSMenu when
+  `Status` changes and tags each item with an index into the commands drawn,
+  one selector for all.
+- There is no "Check as I type": Pause and Quit cover it. `enabled = false`
+  in the config shows as paused and Resume clears it with the timed pause,
+  or a user with that line would have no way back from the menu. The status
+  line never names the model or provider; a failing model reads "AI
+  unavailable, checking on this computer" and the reason stays in the log.
+  The version is folded into Quit.
 - Config and dictionary are read per check, as Flow reads its style per
   dictation, so a setting applies on the next pause rather than the next launch.
 - The key never reaches curl's argv; same `-K -` and 0600 body file as Flow.
@@ -411,15 +424,38 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
   thread; the tick pushes `Status` to the tray only when it changed. Spawned
   with `assume_sni_available`: at login Gramly can start before the shell
   has a tray host, and the icon should appear when the host does. The
-  per-app and pause titles come from `Status`, shared with the macOS menu.
+  tray only draws `surface::menu` (checkmarks, no radio group, for the
+  spelling choices).
+- The tray's app name is the desktop entry's name, found among
+  `gio::AppInfo::all` by id (`{class}.desktop`, any case): gio 0.22 moved
+  `DesktopAppInfo` into a crate this tree does not have. A class with no
+  entry reads as its last dot segment capitalised ("com.slack.Slack" ->
+  "Slack"). The id stays the class, which is what `off_in` holds; the name
+  is cached per class because `front` runs every tick.
 - The systemd user unit sets no environment. It needs `WAYLAND_DISPLAY` and
   `HYPRLAND_INSTANCE_SIGNATURE` in the user manager, which uwsm provides;
   the installer checks `show-environment` and imports them if missing.
   stderr is appended to `$XDG_STATE_HOME/gramly/gramly.log` (`%S`), the
   path "Copy recent log" reads.
-- "Personal dictionary…" opens `dictionary.txt` with `xdg-open`: no list
-  window yet, and so no immediate recheck after an edit; the next text
-  change picks it up.
+- "Personal dictionary…" opens the dictionary window (`dictionary.rs`):
+  a field with Add (Enter too) and the list with a remove button on each
+  word, in the stylesheet `card::css` appends to, so light or dark and
+  matugen-proof like the card. It first opened `dictionary.txt` with
+  `xdg-open`, which under the systemd user unit found no handler and did
+  nothing. It is a plain toplevel, not a layer surface: only a toplevel
+  takes the keyboard on Wayland, and a layer surface that asks for it
+  would hold it for every app. Borderless, with its own close button and
+  Escape, as on the Mac. One at a time: a second click presents it, with
+  the file read again. Hyprland would tile it, so a window rule floats and
+  centres it, sent over the socket at startup beside the layer rule and
+  matched by title (`Gramly dictionary`), not class: GTK takes the class
+  from the program, shared with the key window. Reading, adding (trim, no
+  whitespace inside, no duplicate in any case), removing and the order are
+  `gramly_core::config`, shared with macOS, as are its words
+  (`surface::dictionary`). An add or remove asks the engine to check again
+  at once; the worker reads the file per check, so nothing caches the old
+  list. A word added from a card while the window is open shows only on the
+  next present.
 
 ## macOS surface
 
@@ -600,18 +636,40 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
   sentence. Dark's red is coral (#FF7B72, GitHub's deleted code); the
   salmon passed on contrast but read as pink. Corners are 8, 6 and 3; 12, 8
   and 5 read as bubbly. Nothing in it belongs to macOS - no vibrancy, system
-  accent or SF font - because the Linux surface will draw the same thing.
+  accent or SF font - because the Linux surface draws the same thing.
+  Every value either platform draws lives in `surface/theme.rs` and a test
+  holds it to `design/tokens.json`: macOS kept its measures, type and shadow
+  as constants of its own, and Linux had already drifted (34 high buttons, a
+  380 wide card, a 20% tint where macOS has 16%).
   Cards and the dictionary take the system's light or dark appearance when
   they are built; underlines are the same in both, since the app
   underneath can be either.
 - The font is Atkinson Hyperlegible Next, bundled in the binary
   (`assets/fonts`, SIL Open Font License) and loaded from its bytes: a
   release is one file, and a bundled font looks the same on every machine.
-  Its I, l and 1 differ, which matters when the fix is a capital I.
+  Its I, l and 1 differ, which matters when the fix is a capital I. On Linux
+  the same bytes are written under `$XDG_RUNTIME_DIR/gramly/fonts` at start
+  and handed to fontconfig as application fonts (`font.rs`) before GTK
+  starts, so nothing is installed and uninstall leaves nothing: an install
+  script copying them would have needed the files beside the binary in a
+  release. The stylesheet names the system sans after it.
 - The card's shadow is Gramly's, in a panel of its own that ignores the
   mouse (`shade`). The system's shadow would differ on Linux, and drawn in
   the card's own panel, its pixels would take clicks meant for the text below
-  the card.
+  the card. On Linux it is CSS `box-shadow` on the card, falling inside a
+  margin of the card's layer surface (`SHADE`), with the input region cut to
+  the card alone, re-applied on every map since a layer surface that is
+  mapped again loses it.
+- Linux light or dark comes from the portal's `org.freedesktop.appearance
+  color-scheme` (`appearance.rs`), read and followed on a thread, applied
+  when the next card is built as on macOS. `gtk-application-prefer-dark-theme`
+  is only what an app set for itself and says nothing about the desktop.
+- On Linux the new words' fill is drawn by a sibling `DrawingArea` beneath
+  the label, from the label's own layout (`index_to_pos` per character),
+  because Pango's background attribute is a square of the whole line. The
+  card fades by GTK opacity and rises through its own margins, never the
+  surface's size; Hyprland's layer animation stays off. The hairline is one
+  whole pixel, as GTK borders are, where macOS draws half a point.
 - The menu bar icon is the system's spell-check symbol
   (`text.badge.checkmark`), not a logo. A drawn mark (a g whose tail is the
   underline) shipped in 0.2.0 and was taken out: the name will change, and

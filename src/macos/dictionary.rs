@@ -14,7 +14,8 @@
 //! again each time it opens, so it follows a change of appearance.
 
 use crate::macos::overlay::plain_button;
-use crate::macos::theme::{self, Palette, Rgba, Weight};
+use crate::macos::theme::{self, Face, Palette, Rgba};
+use crate::surface::dictionary;
 use gramly_core::config;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, NSObjectProtocol};
@@ -29,10 +30,10 @@ use objc2_foundation::{
     NSAttributedString, NSAttributedStringKey, NSDictionary, NSObject, NSString,
 };
 
-const WIDTH: f64 = 320.0;
-const HEIGHT: f64 = 460.0;
-const PAD: f64 = 16.0;
-const ROW: f64 = 36.0;
+const WIDTH: f64 = theme::DICTIONARY_WIDTH;
+const HEIGHT: f64 = theme::DICTIONARY_HEIGHT;
+const PAD: f64 = theme::DICTIONARY_PAD;
+const ROW: f64 = theme::DICTIONARY_ROW;
 /// Where the field sits, and where the list starts and stops, from the top
 /// and bottom of the window.
 const FIELD_TOP: f64 = 74.0;
@@ -91,15 +92,9 @@ pub struct Dictionary {
     words: Vec<String>,
 }
 
-fn label(
-    text: &str,
-    size: f64,
-    weight: Weight,
-    color: Rgba,
-    mtm: MainThreadMarker,
-) -> Retained<NSTextField> {
+fn label(text: &str, face: Face, color: Rgba, mtm: MainThreadMarker) -> Retained<NSTextField> {
     let label = NSTextField::labelWithString(&NSString::from_str(text), mtm);
-    label.setFont(Some(&theme::font(size, weight)));
+    label.setFont(Some(&theme::font(face.size, face.weight)));
     label.setTextColor(Some(&theme::ns(color)));
     label.setLineBreakMode(NSLineBreakMode::ByTruncatingTail);
     label
@@ -178,7 +173,7 @@ impl Dictionary {
 
         // Header: the title and the close button. No logo until the name
         // is settled.
-        let title = label("Dictionary", 15.0, Weight::Semibold, p.text, mtm);
+        let title = label(dictionary::TITLE, theme::DICTIONARY_TITLE, p.text, mtm);
         let title_h = title.fittingSize().height;
         title.setFrame(from_top(
             PAD,
@@ -199,18 +194,12 @@ impl Dictionary {
         ));
         content.addSubview(&close);
 
-        let sub = label(
-            "Gramly never flags these words.",
-            13.0,
-            Weight::Regular,
-            p.text2,
-            mtm,
-        );
+        let sub = label(dictionary::SUBTITLE, theme::DICTIONARY_HINT, p.text2, mtm);
         sub.setFrame(from_top(PAD, PAD + 24.0, inner, 18.0, HEIGHT));
         content.addSubview(&sub);
 
         // The field and its button.
-        let add = plain_button("Add", false, sel!(addWord:), target, p, mtm);
+        let add = plain_button(dictionary::ADD, false, sel!(addWord:), target, p, mtm);
         let add_w = add.frame().size.width;
         add.setFrameOrigin(from_top(WIDTH - PAD - add_w, FIELD_TOP, add_w, 32.0, HEIGHT).origin);
         content.addSubview(&add);
@@ -226,7 +215,7 @@ impl Dictionary {
             layer.setBorderColor(Some(&theme::cg(p.line)));
         }
         content.addSubview(&frame);
-        let font = theme::font(14.0, Weight::Regular);
+        let font = theme::font(theme::DICTIONARY_WORD.size, theme::DICTIONARY_WORD.weight);
         let field = NSTextField::initWithFrame(
             NSTextField::alloc(mtm),
             CGRect::new(CGPoint::new(0.0, 0.0), CGSize::new(box_w - 20.0, 20.0)),
@@ -248,7 +237,7 @@ impl Dictionary {
             unsafe {
                 NSAttributedString::initWithString_attributes(
                     NSAttributedString::alloc(),
-                    &NSString::from_str("Add a word"),
+                    &NSString::from_str(dictionary::PLACEHOLDER),
                     Some(&attributes),
                 )
             }
@@ -279,7 +268,7 @@ impl Dictionary {
         list.setBorderType(NSBorderType::NoBorder);
         content.addSubview(&list);
 
-        let count = label("", 12.5, Weight::Regular, p.text2, mtm);
+        let count = label("", theme::DICTIONARY_COUNT, p.text2, mtm);
         count.setFrame(CGRect::new(
             CGPoint::new(PAD, 14.0),
             CGSize::new(inner, 16.0),
@@ -313,10 +302,7 @@ impl Dictionary {
     }
 
     pub fn reload(&mut self, target: &AnyObject, mtm: MainThreadMarker) {
-        let mut words = config::dictionary();
-        words.sort_by_key(|w| w.to_lowercase());
-        words.dedup_by_key(|w| w.to_lowercase());
-        self.words = words;
+        self.words = config::sorted_dictionary();
         self.render(target, mtm);
     }
 
@@ -332,21 +318,14 @@ impl Dictionary {
 
     /// Adds what the field holds. Returns whether the dictionary changed.
     pub fn add(&mut self, target: &AnyObject, mtm: MainThreadMarker) -> bool {
-        let word = self.field.stringValue().to_string().trim().to_string();
+        let input = self.field.stringValue().to_string();
         self.field.setStringValue(&NSString::from_str(""));
-        if word.is_empty() || word.contains(char::is_whitespace) {
-            return false;
-        }
-        let known = self
-            .words
-            .iter()
-            .any(|w| w.to_lowercase() == word.to_lowercase());
-        if !known && let Err(err) = config::add_to_dictionary(&word) {
-            note!("adding {word:?} to the dictionary: {err:#}");
-            return false;
-        }
+        let added = config::learn_word(&input).unwrap_or_else(|err| {
+            note!("adding {input:?} to the dictionary: {err:#}");
+            false
+        });
         self.reload(target, mtm);
-        !known
+        added
     }
 
     /// Removes the word shown at `index`. Returns whether it was removed.
@@ -354,8 +333,8 @@ impl Dictionary {
         if index >= self.words.len() {
             return false;
         }
-        let word = self.words.remove(index);
-        if let Err(err) = config::save_dictionary(&self.words) {
+        let word = &self.words[index];
+        if let Err(err) = config::forget_word(word) {
             note!("removing {word:?} from the dictionary: {err:#}");
         }
         self.reload(target, mtm);
@@ -372,13 +351,7 @@ impl Dictionary {
             CGRect::new(CGPoint::new(0.0, 0.0), CGSize::new(width, height)),
         );
         if self.words.is_empty() {
-            let empty = label(
-                "No words yet. Words you add here, or from a card, show up in this list.",
-                13.0,
-                Weight::Regular,
-                p.text2,
-                mtm,
-            );
+            let empty = label(dictionary::EMPTY, theme::DICTIONARY_HINT, p.text2, mtm);
             empty.setLineBreakMode(NSLineBreakMode::ByWordWrapping);
             empty.setAlignment(NSTextAlignment::Center);
             empty.setFrame(from_top(24.0, 28.0, width - 48.0, 40.0, height));
@@ -386,7 +359,7 @@ impl Dictionary {
         }
         for (index, word) in self.words.iter().enumerate() {
             let top = index as f64 * ROW;
-            let text = label(word, 14.0, Weight::Regular, p.text, mtm);
+            let text = label(word, theme::DICTIONARY_WORD, p.text, mtm);
             let text_h = text.fittingSize().height;
             text.setFrame(from_top(
                 8.0,
@@ -404,12 +377,8 @@ impl Dictionary {
         }
         self.list.setDocumentView(Some(&document));
         document.scrollPoint(CGPoint::new(0.0, height));
-        let n = self.words.len();
-        self.count.setStringValue(&NSString::from_str(&match n {
-            0 => String::new(),
-            1 => "1 word".into(),
-            n => format!("{n} words"),
-        }));
+        self.count
+            .setStringValue(&NSString::from_str(&dictionary::count(self.words.len())));
     }
 }
 

@@ -1,10 +1,8 @@
 //! What the menu items that touch files and the clipboard do.
 
 use crate::surface::recent_log;
-use gramly_core::config::dictionary_path;
 use std::ffi::OsString;
 use std::path::PathBuf;
-use std::process::Command;
 use wl_clipboard_rs::copy::{self, MimeType, Options, Source};
 
 /// Where the systemd unit appends stderr: `%S/gramly/gramly.log`, which
@@ -32,30 +30,6 @@ pub fn copy_recent_log() {
     match copied {
         Ok(()) => note!("copied the end of the log to the clipboard"),
         Err(why) => note!("recent log not copied: {why}"),
-    }
-}
-
-// ponytail: the dictionary opens in whatever edits text files, where macOS
-// has a list window. Upgrade path: a GTK list window with add and remove,
-// calling `Engine::recheck` after a change, as the macOS one does.
-pub fn open_dictionary() {
-    let path = dictionary_path();
-    let ready = path
-        .parent()
-        .map_or(Ok(()), std::fs::create_dir_all)
-        .and_then(|()| {
-            std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&path)
-                .map(drop)
-        });
-    if let Err(why) = ready {
-        note!("dictionary not created at {}: {why}", path.display());
-        return;
-    }
-    if let Err(why) = Command::new("xdg-open").arg(&path).spawn() {
-        note!("xdg-open failed for {}: {why}", path.display());
     }
 }
 

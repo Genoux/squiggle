@@ -64,10 +64,10 @@ const DISMISSALS: usize = 2000;
 /// pointer reads as a bug, whatever the reason - and indexes nothing.
 const ORPHAN: usize = usize::MAX;
 
-const LOCAL_ONLY: &str = if cfg!(target_os = "macos") {
-    "Checking on this Mac only"
+const THIS_MACHINE: &str = if cfg!(target_os = "macos") {
+    "this Mac"
 } else {
-    "Checking on this computer only"
+    "this computer"
 };
 
 /// A dismissed suggestion: the few words before it on its line, what it
@@ -83,8 +83,9 @@ type Dismissal = (String, String, String);
 pub struct Status {
     pub line: String,
     pub trusted: bool,
-    pub enabled: bool,
     pub ai: bool,
+    /// Timed pause, or `enabled = false` in the config: either way the menu
+    /// offers Resume, since no toggle is left to turn it back on.
     pub paused: bool,
     pub front: Option<(String, String)>,
     pub off_here: bool,
@@ -102,7 +103,7 @@ pub struct AppItem {
 impl Status {
     pub fn pause_title(&self) -> &'static str {
         if self.paused {
-            "Resume checking"
+            "Resume"
         } else {
             "Pause for an hour"
         }
@@ -257,18 +258,17 @@ impl<H: Host, O: Overlay> Engine<H, O> {
         } else if let Some((_, name)) = off_here {
             format!("Off in {name}")
         } else if !self.ai_on() {
-            LOCAL_ONLY.to_string()
-        } else if let Some(error) = &self.ai_error {
-            format!("Model unavailable: {}", truncate(error, 48))
+            format!("Checking on {THIS_MACHINE}")
+        } else if self.ai_error.is_some() {
+            format!("AI unavailable, checking on {THIS_MACHINE}")
         } else {
-            "Checking with Gemini 3.5 Flash-Lite".to_string()
+            "Gramly is on".to_string()
         };
         Status {
             line,
             trusted: self.trusted,
-            enabled: config.enabled,
             ai: self.ai_on(),
-            paused: self.paused_until.is_some(),
+            paused: self.paused_until.is_some() || !config.enabled,
             front: self.front.clone(),
             off_here: off_here.is_some(),
             terminal: self
@@ -357,14 +357,31 @@ impl<H: Host, O: Overlay> Engine<H, O> {
         self.ai_error = None;
     }
 
+    /// Resume clears both kinds of pause, so a config with `enabled = false`
+    /// is not a state the menu cannot leave.
     pub fn toggle_pause(&mut self) {
-        self.paused_until = match self.paused_until {
-            Some(_) => None,
-            None => {
-                let until = Instant::now() + PAUSE_FOR;
-                Some((until, self.host.clock(until)))
-            }
+        let resuming = self.paused_until.is_some() || !self.config.enabled;
+        if !self.config.enabled {
+            update_config(|c| c.enabled = true);
+        }
+        self.paused_until = (!resuming).then(|| {
+            let until = Instant::now() + PAUSE_FOR;
+            (until, self.host.clock(until))
+        });
+        self.reset();
+    }
+
+    pub fn toggle_ai(&mut self) {
+        update_config(|c| c.ai = !c.ai);
+        self.clear_ai_error();
+        self.reset();
+    }
+
+    pub fn set_dialect(&mut self, index: usize) {
+        let Some(&(dialect, _)) = DIALECTS.get(index) else {
+            return;
         };
+        update_config(|c| c.dialect = dialect.into());
         self.reset();
     }
 
@@ -804,12 +821,4 @@ fn trace(why: &str) {
     if std::env::var_os("GRAMLY_TRACE").is_some() {
         note!("{why}");
     }
-}
-
-fn truncate(text: &str, max: usize) -> String {
-    if text.chars().count() <= max {
-        return text.to_string();
-    }
-    let cut: String = text.chars().take(max - 1).collect();
-    format!("{cut}…")
 }

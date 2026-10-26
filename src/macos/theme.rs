@@ -18,7 +18,7 @@ use std::cell::RefCell;
 /// The palette for the appearance the system is in now. Read whenever a
 /// card or the dictionary is built, so a switch applies to the next one.
 pub fn palette(mtm: MainThreadMarker) -> &'static Palette {
-    if dark(mtm) { &DARK } else { &LIGHT }
+    palette_for(dark(mtm))
 }
 
 pub fn dark(mtm: MainThreadMarker) -> bool {
@@ -36,32 +36,6 @@ pub fn ns(c: Rgba) -> Retained<NSColor> {
 pub fn cg(c: Rgba) -> CFRetained<CGColor> {
     CGColor::new_srgb(c.r, c.g, c.b, c.a)
 }
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Weight {
-    Regular,
-    Medium,
-    Semibold,
-}
-
-/// Atkinson Hyperlegible Next, bundled (SIL Open Font License, see
-/// assets/fonts/OFL.txt). Its I, l and 1 never look alike, which matters
-/// when the fix is a capital I, and a bundled font looks the same on every
-/// machine, Linux included.
-const FONTS: [(Weight, &[u8]); 3] = [
-    (
-        Weight::Regular,
-        include_bytes!("../../assets/fonts/AtkinsonHyperlegibleNext-Regular.ttf"),
-    ),
-    (
-        Weight::Medium,
-        include_bytes!("../../assets/fonts/AtkinsonHyperlegibleNext-Medium.ttf"),
-    ),
-    (
-        Weight::Semibold,
-        include_bytes!("../../assets/fonts/AtkinsonHyperlegibleNext-SemiBold.ttf"),
-    ),
-];
 
 thread_local! {
     /// Loaded from the bytes once per thread; fonts are only made on the
