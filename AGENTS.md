@@ -308,6 +308,14 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
 - Focus comes from `object:state-changed:focused` events. A walk of the
   tree per tick is out: a Zen window with 3086 nodes took 0.44s. The walk
   remains for a field already focused before Gramly was listening.
+- An event that names no text field is not trusted to mean "no field":
+  Zen reports a childless panel of its window as focused each time the
+  window comes forward, and nothing for the field still focused in the
+  page. Taken as a control, no field was looked for, and Gramly showed
+  nothing in Zen while saying it ran. The app is asked once, through
+  `Collection`, for its focused editable text (5-8ms in Zen, through two
+  nested iframes); the walk asks the same first, since a Zen with many
+  tabs passed its 5000-node limit.
 - zbus proxies are built uncached: cached, each one fetches every property
   and subscribes to changes the apps never announce, so values go stale.
 - Every call has a 150ms timeout, as on macOS; zbus's default is 25s.
