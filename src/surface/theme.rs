@@ -9,7 +9,9 @@
 //! too. The values are the ones in design/tokens.json; a test holds them
 //! together.
 
+use super::Mark;
 use gramly_core::Kind;
+use std::time::Duration;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Rgba {
@@ -125,6 +127,10 @@ pub const DARK: Palette = Palette {
     new_fill: hexa(0x30A46C, 0.22),
 };
 
+pub fn palette_for(dark: bool) -> &'static Palette {
+    if dark { &DARK } else { &LIGHT }
+}
+
 /// Drawn over any app, light or dark, so the same in both appearances.
 pub const MISTAKE: Rgba = hex(0xE5484D);
 /// Clearer wording is advice, not an error: blue, as Grammarly draws it.
@@ -145,6 +151,202 @@ pub fn kind(kind: Kind) -> Rgba {
         Kind::Spelling | Kind::Correctness => MISTAKE,
         Kind::Clarity => ADVICE,
     }
+}
+
+/// What a card strikes out: clearer wording is advice, blue, and anything
+/// else a mistake, red.
+pub fn gone(p: &Palette, kind: Kind) -> Rgba {
+    match kind {
+        Kind::Clarity => p.gone_advice,
+        Kind::Spelling | Kind::Correctness => p.gone,
+    }
+}
+
+/// What a word's underline is drawn with.
+pub const UNDERLINE_HEIGHT: f64 = 2.0;
+/// The line's top edge is this far above the word's bottom edge, so it
+/// straddles it.
+pub const UNDERLINE_OFFSET: f64 = 1.0;
+/// The tint and the glow reach this far past each side of the word.
+pub const UNDERLINE_BLEED: f64 = 1.0;
+/// Behind a word whose card is open: its underline's colour at this alpha.
+pub const HOVER_FILL: f64 = 0.16;
+
+/// The tint behind a word: the glow for one just accepted, the underline's
+/// colour faintly while its card is open.
+pub fn mark_fill(mark: &Mark) -> Option<Rgba> {
+    let color = kind(mark.kind);
+    if mark.flash {
+        Some(ACCEPTED)
+    } else if mark.highlighted {
+        Some(Rgba {
+            a: HOVER_FILL,
+            ..color
+        })
+    } else {
+        None
+    }
+}
+
+/// The underline's colour; a word just accepted has none.
+pub fn mark_line(mark: &Mark) -> Option<Rgba> {
+    (!mark.flash).then(|| kind(mark.kind))
+}
+
+/// The card.
+pub const CARD_WIDTH: f64 = 340.0;
+pub const CARD_PAD: f64 = 16.0;
+pub const UNDER_TITLE: f64 = 10.0;
+pub const ABOVE_BUTTONS: f64 = 16.0;
+pub const BETWEEN_BUTTONS: f64 = 8.0;
+/// The title's line, and how far the title is indented for the dot.
+pub const TITLE_LINE: f64 = 18.0;
+pub const TITLE_INDENT: f64 = 15.0;
+pub const DOT: f64 = 7.0;
+/// A hairline: half a point is one pixel on a Retina screen.
+pub const EDGE_WIDTH: f64 = 0.5;
+
+/// The dictionary window.
+pub const DICTIONARY_WIDTH: f64 = 320.0;
+pub const DICTIONARY_HEIGHT: f64 = 460.0;
+pub const DICTIONARY_PAD: f64 = 16.0;
+pub const DICTIONARY_ROW: f64 = 36.0;
+
+/// Every button.
+pub const BUTTON_HEIGHT: f64 = 32.0;
+pub const BUTTON_SIDE: f64 = 12.0;
+pub const BUTTON_OUTLINE: f64 = 1.0;
+
+/// The card's two shadows: a tight one at its edge and a soft one below. The
+/// soft one dropped 18 with a 22 blur, and the card floated like a bubble.
+/// `share` is the part of the palette's `shadow` strength each takes; `inset`
+/// shrinks the shape that casts it.
+pub struct Shadow {
+    pub inset: f64,
+    pub drop: f64,
+    pub blur: f64,
+    pub share: f64,
+}
+
+pub const SHADOW_TIGHT: Shadow = Shadow {
+    inset: 0.0,
+    drop: 1.0,
+    blur: 2.0,
+    share: 0.4,
+};
+pub const SHADOW_SOFT: Shadow = Shadow {
+    inset: 12.0,
+    drop: 14.0,
+    blur: 18.0,
+    share: 1.0,
+};
+
+/// How far the shadow reaches past the card: left, right, top, bottom.
+pub const SHADE: (f64, f64, f64, f64) = (40.0, 40.0, 24.0, 64.0);
+
+/// The card's one motion: it fades in over `CARD_FADE`, moving its last
+/// `CARD_RISE` points towards its word. A button's fill gives way to the
+/// pointer over `HOVER_FADE`: long enough to read as a response, short
+/// enough that sweeping across the buttons does not trail. On Linux the
+/// card just appears: the user found the motion fussy there.
+#[cfg_attr(target_os = "linux", allow(dead_code))]
+pub const CARD_FADE: Duration = Duration::from_millis(140);
+#[cfg_attr(target_os = "linux", allow(dead_code))]
+pub const CARD_RISE: f64 = 3.0;
+pub const HOVER_FADE: Duration = Duration::from_millis(100);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Weight {
+    Regular,
+    Medium,
+    Semibold,
+}
+
+#[cfg(target_os = "linux")]
+impl Weight {
+    pub fn css(self) -> u16 {
+        match self {
+            Weight::Regular => 400,
+            Weight::Medium => 500,
+            Weight::Semibold => 600,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct Face {
+    pub size: f64,
+    pub weight: Weight,
+}
+
+pub const CARD_TITLE: Face = Face {
+    size: 13.0,
+    weight: Weight::Medium,
+};
+/// The sentence, and the line it sits in.
+pub const SENTENCE: Face = Face {
+    size: 15.0,
+    weight: Weight::Regular,
+};
+pub const SENTENCE_LINE: f64 = 24.0;
+pub const NEW_WORDS: Face = Face {
+    size: 15.0,
+    weight: Weight::Semibold,
+};
+pub const BUTTON: Face = Face {
+    size: 13.5,
+    weight: Weight::Medium,
+};
+pub const BUTTON_MAIN: Face = Face {
+    size: 13.5,
+    weight: Weight::Semibold,
+};
+pub const DICTIONARY_TITLE: Face = Face {
+    size: 15.0,
+    weight: Weight::Semibold,
+};
+pub const DICTIONARY_HINT: Face = Face {
+    size: 13.0,
+    weight: Weight::Regular,
+};
+/// A word in the list, and what is typed in the field.
+pub const DICTIONARY_WORD: Face = Face {
+    size: 14.0,
+    weight: Weight::Regular,
+};
+pub const DICTIONARY_COUNT: Face = Face {
+    size: 12.5,
+    weight: Weight::Regular,
+};
+
+/// Atkinson Hyperlegible Next, bundled (SIL Open Font License, see
+/// assets/fonts/OFL.txt). Its I, l and 1 never look alike, which matters
+/// when the fix is a capital I, and a bundled font looks the same on every
+/// machine.
+#[cfg(target_os = "linux")]
+pub const FONT_FAMILY: &str = "Atkinson Hyperlegible Next";
+pub const FONTS: [(Weight, &[u8]); 3] = [
+    (
+        Weight::Regular,
+        include_bytes!("../../assets/fonts/AtkinsonHyperlegibleNext-Regular.ttf"),
+    ),
+    (
+        Weight::Medium,
+        include_bytes!("../../assets/fonts/AtkinsonHyperlegibleNext-Medium.ttf"),
+    ),
+    (
+        Weight::Semibold,
+        include_bytes!("../../assets/fonts/AtkinsonHyperlegibleNext-SemiBold.ttf"),
+    ),
+];
+
+/// A no-break space either side of a new word, so its fill has room to
+/// breathe without touching the letters beside it.
+pub const NEW_WORD_PAD: char = '\u{202F}';
+
+/// The fill behind a new word, from the sentence font's natural height.
+pub fn new_word_fill_height(natural: f64) -> f64 {
+    (natural + 5.0).min(SENTENCE_LINE - 1.0).round()
 }
 
 #[cfg(target_os = "linux")]
@@ -280,6 +482,100 @@ pub(crate) mod tokens {
         assert_eq!(num(&t, "corner.inline"), CORNER_INLINE);
     }
 
+    fn weight_name(weight: Weight) -> &'static str {
+        match weight {
+            Weight::Regular => "regular",
+            Weight::Medium => "medium",
+            Weight::Semibold => "semibold",
+        }
+    }
+
+    #[test]
+    fn measures_match_the_tokens() {
+        let t = load();
+        for (path, ours) in [
+            ("card.width", CARD_WIDTH),
+            ("card.padding", CARD_PAD),
+            ("card.under_title", UNDER_TITLE),
+            ("card.above_buttons", ABOVE_BUTTONS),
+            ("card.between_buttons", BETWEEN_BUTTONS),
+            ("card.title_line", TITLE_LINE),
+            ("card.title_indent", TITLE_INDENT),
+            ("card.dot", DOT),
+            ("card.context_words", crate::surface::card::CONTEXT as f64),
+            ("button.height", BUTTON_HEIGHT),
+            ("button.side", BUTTON_SIDE),
+            ("button.outline", BUTTON_OUTLINE),
+            ("underline.height", UNDERLINE_HEIGHT),
+            ("underline.offset", UNDERLINE_OFFSET),
+            ("underline.bleed", UNDERLINE_BLEED),
+            ("underline.hover_fill", HOVER_FILL),
+            ("shadow.edge_width", EDGE_WIDTH),
+            ("shadow.tight.inset", SHADOW_TIGHT.inset),
+            ("shadow.tight.drop", SHADOW_TIGHT.drop),
+            ("shadow.tight.blur", SHADOW_TIGHT.blur),
+            ("shadow.tight.share", SHADOW_TIGHT.share),
+            ("shadow.soft.inset", SHADOW_SOFT.inset),
+            ("shadow.soft.drop", SHADOW_SOFT.drop),
+            ("shadow.soft.blur", SHADOW_SOFT.blur),
+            ("shadow.soft.share", SHADOW_SOFT.share),
+            ("shadow.reach.left", SHADE.0),
+            ("shadow.reach.right", SHADE.1),
+            ("shadow.reach.top", SHADE.2),
+            ("shadow.reach.bottom", SHADE.3),
+            ("motion.card_fade_ms", CARD_FADE.as_millis() as f64),
+            ("motion.card_rise", CARD_RISE),
+            ("motion.hover_ms", HOVER_FADE.as_millis() as f64),
+            ("type.sentence.line", SENTENCE_LINE),
+        ] {
+            let theirs = num(&t, path);
+            assert!(
+                (ours - theirs).abs() < 1e-6,
+                "{path}: {ours} here, {theirs} in tokens.json"
+            );
+        }
+    }
+
+    #[test]
+    fn type_matches_the_tokens() {
+        let t = load();
+        for (role, face) in [
+            ("card_title", CARD_TITLE),
+            ("sentence", SENTENCE),
+            ("new_words", NEW_WORDS),
+            ("button", BUTTON),
+            ("button_main", BUTTON_MAIN),
+        ] {
+            assert_eq!(num(&t, &format!("type.{role}.size")), face.size, "{role}");
+            assert_eq!(
+                at(&t, &format!("type.{role}.weight")),
+                weight_name(face.weight),
+                "{role}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_bundled_fonts_are_the_ones_the_tokens_name() {
+        let t = load();
+        let files = at(&t, "font.files").as_str().expect("a folder");
+        assert_eq!(FONTS.len(), 3);
+        for (weight, _) in FONTS {
+            let name = match weight {
+                Weight::Regular => "Regular",
+                Weight::Medium => "Medium",
+                Weight::Semibold => "SemiBold",
+            };
+            let file = format!("{files}/AtkinsonHyperlegibleNext-{name}.ttf");
+            assert!(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join(&file)
+                    .exists(),
+                "{file}"
+            );
+        }
+    }
+
     #[test]
     fn the_glow_lasts_as_long_as_the_tokens_say() {
         let t = load();
@@ -305,9 +601,60 @@ pub(crate) mod tokens {
     }
 }
 
+#[cfg(test)]
+mod mark_tests {
+    use super::*;
+
+    fn mark(highlighted: bool, flash: bool) -> Mark {
+        Mark {
+            rect: crate::surface::Rect {
+                x: 0.0,
+                y: 0.0,
+                w: 1.0,
+                h: 1.0,
+            },
+            kind: Kind::Spelling,
+            highlighted,
+            flash,
+        }
+    }
+
+    #[test]
+    fn a_word_is_tinted_while_its_card_is_open() {
+        assert_eq!(mark_fill(&mark(false, false)), None);
+        assert_eq!(
+            mark_fill(&mark(true, false)),
+            Some(Rgba {
+                a: HOVER_FILL,
+                ..MISTAKE
+            })
+        );
+    }
+
+    #[test]
+    fn an_accepted_word_glows_and_has_no_line() {
+        assert_eq!(mark_fill(&mark(false, true)), Some(ACCEPTED));
+        assert_eq!(mark_line(&mark(false, true)), None);
+        assert_eq!(mark_line(&mark(false, false)), Some(MISTAKE));
+    }
+
+    #[test]
+    fn clearer_wording_takes_the_advice_colour_out() {
+        assert_eq!(gone(&DARK, Kind::Clarity), DARK.gone_advice);
+        assert_eq!(gone(&LIGHT, Kind::Spelling), LIGHT.gone);
+        assert_eq!(gone(&LIGHT, Kind::Correctness), LIGHT.gone);
+    }
+}
+
 #[cfg(all(test, target_os = "linux"))]
 mod linux_tests {
     use super::*;
+
+    #[test]
+    fn the_family_is_the_tokens() {
+        let t = tokens::load();
+        assert_eq!(t["font"]["family"], FONT_FAMILY);
+    }
 
     #[test]
     fn css_rounds_channels_to_bytes() {

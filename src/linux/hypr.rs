@@ -1,5 +1,5 @@
 use crate::surface::{Point, Rect};
-use std::io::{Read, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -27,7 +27,20 @@ pub struct Monitor {
 
 /// Matches the layers Gramly draws, by namespace, so Hyprland does not fade
 /// them in and out: nothing animates.
-const NO_ANIMATION: &str = r#"dispatch function() hl.layer_rule({ name = "gramly-still", match = { namespace = "^gramly" }, no_anim = true }) end"#;
+const NO_ANIMATION: &str = r#"dispatch function() hl.layer_rule({ name = "gramly-still", match = { namespace = "^gramly-.*$" }, no_anim = true }) end"#;
+
+/// The dictionary window's title, which its rule matches. A title and not a
+/// class: GTK takes the class from the program for every plain window, so
+/// the OpenRouter key window would share it.
+pub const DICTIONARY_TITLE: &str = "Gramly dictionary";
+
+/// A small utility window floats in the middle of the screen; tiled, it
+/// would take half of it.
+fn float_dictionary_command() -> String {
+    format!(
+        r#"dispatch function() hl.window_rule({{ name = "gramly-dictionary", match = {{ title = "^{DICTIONARY_TITLE}$" }}, float = true, center = true }}) end"#
+    )
+}
 
 pub fn active_window() -> Option<Window> {
     parse(&request("j/activewindow")?)
@@ -41,9 +54,37 @@ pub fn pointer() -> Option<Point> {
     parse_pointer(&request("j/cursorpos")?)
 }
 
-/// Hyprland's reply, "ok" when the rule was taken.
-pub fn disable_layer_animation() -> Option<String> {
-    request(NO_ANIMATION)
+fn send_rules() {
+    [
+        ("no-animation", NO_ANIMATION.to_string()),
+        ("floating dictionary", float_dictionary_command()),
+    ]
+    .into_iter()
+    .map(|(rule, command)| (rule, request(&command)))
+    .filter(|(_, reply)| reply.as_deref().map(str::trim) != Some("ok"))
+    .for_each(|(rule, reply)| note!("Hyprland did not take the {rule} rule: {reply:?}"));
+}
+
+/// Sends Gramly's rules now and again after every config reload, on a
+/// thread of its own. A rule sent over the socket lasts only until the next
+/// reload; after one, the user's `layersIn` slide moved every underline and
+/// card into place.
+pub fn keep_rules() {
+    send_rules();
+    let Some(events) = socket(".socket2.sock") else {
+        return;
+    };
+    std::thread::spawn(move || {
+        let Ok(stream) = UnixStream::connect(events) else {
+            note!("not following Hyprland's reloads: no event socket");
+            return;
+        };
+        BufReader::new(stream)
+            .lines()
+            .map_while(Result::ok)
+            .filter(|event| event.starts_with("configreloaded>>"))
+            .for_each(|_| send_rules());
+    });
 }
 
 /// XKB keycodes, which is what Hyprland's `code:N` takes (evdev + 8: V is
@@ -74,16 +115,21 @@ pub fn send_shortcut(mods: &str, keycode: u32, window: &Window) -> bool {
         .is_some_and(|reply| reply.trim() == "ok")
 }
 
+fn socket(name: &str) -> Option<PathBuf> {
+    Some(
+        [
+            std::env::var_os("XDG_RUNTIME_DIR")?,
+            "hypr".into(),
+            std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE")?,
+            name.into(),
+        ]
+        .iter()
+        .collect(),
+    )
+}
+
 fn request(command: &str) -> Option<String> {
-    let socket: PathBuf = [
-        std::env::var_os("XDG_RUNTIME_DIR")?,
-        "hypr".into(),
-        std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE")?,
-        ".socket.sock".into(),
-    ]
-    .iter()
-    .collect();
-    let mut stream = UnixStream::connect(socket).ok()?;
+    let mut stream = UnixStream::connect(socket(".socket.sock")?).ok()?;
     stream.set_read_timeout(Some(TIMEOUT)).ok()?;
     stream.set_write_timeout(Some(TIMEOUT)).ok()?;
     stream.write_all(command.as_bytes()).ok()?;
@@ -276,6 +322,14 @@ mod tests {
     fn a_broken_monitor_is_left_out() {
         assert_eq!(parse_monitors(r#"[{"name": "x"}]"#), []);
         assert_eq!(parse_monitors("invalid"), []);
+    }
+
+    #[test]
+    fn the_dictionary_window_floats_centred_by_title() {
+        assert_eq!(
+            float_dictionary_command(),
+            r#"dispatch function() hl.window_rule({ name = "gramly-dictionary", match = { title = "^Gramly dictionary$" }, float = true, center = true }) end"#
+        );
     }
 
     #[test]

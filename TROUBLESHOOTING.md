@@ -11,7 +11,7 @@ that is misbehaving, and read what it says.
 - **After an update it stopped working.** macOS ties the grant to the app's
   signature, and each install signs it anew. Remove Gramly from the
   Accessibility list with **−**, then add it back (or toggle it off and on).
-- **It is paused.** Menu bar icon → *Check as I type*.
+- **It is paused.** The menu says *Paused*; menu → *Resume*.
 
 ## Nothing is underlined in one app
 
@@ -28,7 +28,7 @@ that is misbehaving, and read what it says.
 ## Only spelling is caught, never the subtler mistakes
 
 AI suggestions need a key: menu → *OpenRouter key…*. The first menu line says
-*Checking with Gemini 3.5 Flash-Lite* when it is working, or the reason when it is not.
+*Gramly is on* when it is working, or *AI unavailable* when it is not (the log has the reason).
 
 ## Accept does nothing, or pastes something else
 

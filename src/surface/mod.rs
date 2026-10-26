@@ -5,10 +5,10 @@
 //! is drawn), and `Engine` does the rest.
 
 pub mod card;
+pub mod dictionary;
 mod engine;
 mod geometry;
-// Linux's overlay keeps Flow's palette until it takes the Ink look from here.
-#[cfg_attr(target_os = "linux", allow(dead_code))]
+pub mod menu;
 pub mod theme;
 pub mod write;
 

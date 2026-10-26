@@ -15,6 +15,7 @@
 //! Layer surfaces are placed from their output's corner, so every global
 //! rectangle crosses to the output's own coordinates once, here.
 
+use super::appearance;
 use super::card::{self, Built, OnAction};
 use super::hypr::{self, Monitor};
 use crate::surface::{self, Action, Card, Mark, Point, Rect, place_card, theme};
@@ -22,8 +23,10 @@ use gtk::prelude::*;
 use gtk::{cairo, gdk};
 use gtk4 as gtk;
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 /// Outputs rarely change; asking Hyprland on every tick would be a socket
@@ -123,10 +126,16 @@ impl Surface {
     }
 }
 
-fn click_through(window: &gtk::Window) {
+/// Only `keep` takes the pointer; the rest of the surface lets clicks
+/// through to what is beneath it.
+fn take_input_in(window: &gtk::Window, keep: &[cairo::RectangleInt]) {
     if let Some(surface) = window.surface() {
-        surface.set_input_region(Some(&cairo::Region::create()));
+        surface.set_input_region(Some(&cairo::Region::create_rectangles(keep)));
     }
+}
+
+fn click_through(window: &gtk::Window) {
+    take_input_in(window, &[]);
 }
 
 fn rounded(context: &cairo::Context, rect: Rect, radius: f64) {
@@ -152,7 +161,7 @@ fn rounded(context: &cairo::Context, rect: Rect, radius: f64) {
     context.close_path();
 }
 
-fn fill(context: &cairo::Context, rect: Rect, radius: f64, color: theme::Rgba) {
+pub(super) fn fill(context: &cairo::Context, rect: Rect, radius: f64, color: theme::Rgba) {
     rounded(context, rect, radius);
     context.set_source_rgba(color.r, color.g, color.b, color.a);
     // A failed fill leaves the context in an error state that every later
@@ -160,44 +169,33 @@ fn fill(context: &cairo::Context, rect: Rect, radius: f64, color: theme::Rgba) {
     let _ = context.fill();
 }
 
-/// A 2px line straddling the word's bottom edge, a fill behind it when
-/// highlighted, and for a word just accepted the fill alone, in green.
+/// Each word's underline, with a tint or glow behind it.
 fn paint(context: &cairo::Context, marks: &[Mark]) {
     for mark in marks {
         let Rect { x, y, w, h } = mark.rect;
-        let color = if mark.flash {
-            theme::ACCEPTED
-        } else {
-            theme::kind(mark.kind)
-        };
-        if mark.highlighted {
-            let tint = if mark.flash {
-                color
-            } else {
-                theme::Rgba { a: 0.2, ..color }
-            };
+        if let Some(tint) = theme::mark_fill(mark) {
             fill(
                 context,
                 Rect {
-                    x: x - 1.0,
+                    x: x - theme::UNDERLINE_BLEED,
                     y,
-                    w: w + 2.0,
+                    w: w + theme::UNDERLINE_BLEED * 2.0,
                     h,
                 },
-                3.0,
+                theme::CORNER_INLINE,
                 tint,
             );
         }
-        if !mark.flash {
+        if let Some(color) = theme::mark_line(mark) {
             fill(
                 context,
                 Rect {
                     x,
-                    y: y + h - 1.0,
+                    y: y + h - theme::UNDERLINE_OFFSET,
                     w,
-                    h: 2.0,
+                    h: theme::UNDERLINE_HEIGHT,
                 },
-                1.0,
+                theme::UNDERLINE_HEIGHT / 2.0,
                 color,
             );
         }
@@ -223,6 +221,13 @@ pub struct LayerOverlay {
     covering: Option<Rect>,
     card: Surface,
     shown: Option<Shown>,
+    /// Where the card is inside its surface, which the shadow surrounds:
+    /// the only part that takes the pointer.
+    card_area: Rc<Cell<cairo::RectangleInt>>,
+    dark: Arc<AtomicBool>,
+    /// The appearance the stylesheet was last made for.
+    styled: Option<bool>,
+    styles: gtk::CssProvider,
 }
 
 impl LayerOverlay {
@@ -230,7 +235,6 @@ impl LayerOverlay {
     /// that gets pointer events, so rows light and click on their own.
     pub fn new(on_action: OnAction) -> Self {
         let provider = gtk::CssProvider::new();
-        provider.load_from_data(&card::css());
         // Above the user's own gtk.css: a full theme there (matugen's, 300KB)
         // painted every window grey, the whole-screen underline layer
         // included, and restyled the card's buttons.
@@ -250,7 +254,12 @@ impl LayerOverlay {
         WidgetExt::realize(&underlines.window);
         click_through(&underlines.window);
         underlines.window.connect_map(click_through);
-        Self {
+        let card = Surface::new("gramly-card", &[Edge::Left, Edge::Top]);
+        let card_area = Rc::new(Cell::new(cairo::RectangleInt::new(0, 0, 1, 1)));
+        let area = Rc::clone(&card_area);
+        card.window
+            .connect_map(move |window| take_input_in(window, &[area.get()]));
+        let mut overlay = Self {
             on_action,
             layout: None,
             underlines,
@@ -258,8 +267,25 @@ impl LayerOverlay {
             painted,
             drawn: Vec::new(),
             covering: None,
-            card: Surface::new("gramly-card", &[Edge::Left, Edge::Top]),
+            card,
             shown: None,
+            card_area,
+            dark: appearance::watch(),
+            styled: None,
+            styles: provider,
+        };
+        overlay.restyle();
+        overlay
+    }
+
+    /// The stylesheet for the desktop's appearance now, made again only when
+    /// it changed.
+    fn restyle(&mut self) {
+        let dark = self.dark.load(Ordering::Relaxed);
+        if self.styled != Some(dark) {
+            self.styles
+                .load_from_data(&card::css(theme::palette_for(dark)));
+            self.styled = Some(dark);
         }
     }
 
@@ -334,15 +360,29 @@ impl surface::Overlay for LayerOverlay {
         let Some(monitor) = self.monitor_at(word) else {
             return;
         };
-        let built = card::build(card, index, &self.on_action);
-        let (width, height) = built.size;
+        self.restyle();
+        let dark = self.styled.unwrap_or_default();
+        let built = card::build(card, index, &self.on_action, theme::palette_for(dark));
+        self.card.window.set_child(Some(&built.root));
+        let (width, height) = card::fit(&built.root);
         let origin = place_card(word, (width, height), monitor.usable);
         let (left, top) = margins(origin, monitor.frame);
+        let (reach_left, _, reach_top, _) = theme::SHADE;
         self.card.on(&monitor);
-        self.card.window.set_margin(Edge::Left, left);
-        self.card.window.set_margin(Edge::Top, top);
-        self.card.window.set_child(Some(&built.root));
+        self.card
+            .window
+            .set_margin(Edge::Left, left - reach_left as i32);
+        self.card
+            .window
+            .set_margin(Edge::Top, top - reach_top as i32);
+        self.card_area.set(cairo::RectangleInt::new(
+            reach_left as i32,
+            reach_top as i32,
+            width as i32,
+            height as i32,
+        ));
         self.card.window.set_visible(true);
+        take_input_in(&self.card.window, &[self.card_area.get()]);
         self.shown = Some(Shown {
             built,
             frame: Rect {

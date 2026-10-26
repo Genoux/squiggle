@@ -1,15 +1,19 @@
 mod actions;
+mod appearance;
 mod atspi;
 mod card;
 mod clipboard;
+mod dictionary;
 mod edit;
+mod font;
 mod host;
 mod hypr;
 mod key;
 mod overlay;
 mod tray;
 
-use crate::surface::{self, DIALECTS, Engine, Field as _, Status, TICK, update_config};
+use crate::surface::menu::Command;
+use crate::surface::{self, Engine, Field as _, Status, TICK};
 use gtk::glib;
 use gtk4 as gtk;
 use host::LinuxHost;
@@ -18,12 +22,12 @@ use std::cell::RefCell;
 use std::rc::{Rc, Weak};
 use std::sync::mpsc;
 use std::time::Duration;
-use tray::Command;
 
 type LinuxEngine = Engine<LinuxHost, LayerOverlay>;
 type SharedEngine = Rc<RefCell<Option<LinuxEngine>>>;
 
 pub fn run() -> anyhow::Result<()> {
+    font::register();
     gtk::init()?;
     anyhow::ensure!(
         gtk4_layer_shell::is_supported(),
@@ -34,10 +38,7 @@ pub fn run() -> anyhow::Result<()> {
     }
     let conn = atspi::connect()?;
     let focus = atspi::listen(&conn)?;
-    match hypr::disable_layer_animation().as_deref().map(str::trim) {
-        Some("ok") => {}
-        reply => note!("Hyprland did not take the no-animation rule: {reply:?}"),
-    }
+    hypr::keep_rules();
 
     let engine: SharedEngine = Rc::new(RefCell::new(None));
     let clicked = Rc::downgrade(&engine);
@@ -95,38 +96,37 @@ fn apply(
     main_loop: &glib::MainLoop,
 ) {
     match command {
-        Command::ToggleEnabled => {
-            update_config(|config| config.enabled = !config.enabled);
-            engine.reset();
-        }
         Command::Pause => engine.toggle_pause(),
         Command::ToggleApp => engine.toggle_app(),
-        Command::ToggleAi => {
-            update_config(|config| config.ai = !config.ai);
-            engine.clear_ai_error();
-            engine.reset();
-        }
+        Command::ToggleAi => engine.toggle_ai(),
         Command::SetKey => {
             let shared = shared.clone();
             key::ask(move || {
-                if let Some(engine) = shared.upgrade()
-                    && let Ok(mut engine) = engine.try_borrow_mut()
-                    && let Some(engine) = engine.as_mut()
-                {
+                with_engine(&shared, |engine| {
                     engine.clear_ai_error();
                     engine.reset();
-                }
+                });
             });
         }
-        Command::Spelling(index) => {
-            if let Some(&(dialect, _)) = DIALECTS.get(index) {
-                update_config(|config| config.dialect = dialect.into());
-                engine.reset();
-            }
+        Command::Spelling(index) => engine.set_dialect(index),
+        Command::Dictionary => {
+            let shared = shared.clone();
+            dictionary::show(move || with_engine(&shared, LinuxEngine::recheck));
         }
-        Command::Dictionary => actions::open_dictionary(),
         Command::CopyLog => actions::copy_recent_log(),
+        Command::GrantAccess => {}
         Command::Quit => main_loop.quit(),
+    }
+}
+
+/// Runs `change` on the engine from a window's callback, which can arrive
+/// while the engine is mid-tick; that one is dropped, as a click on a card is.
+fn with_engine(shared: &Weak<RefCell<Option<LinuxEngine>>>, change: impl FnOnce(&mut LinuxEngine)) {
+    if let Some(engine) = shared.upgrade()
+        && let Ok(mut engine) = engine.try_borrow_mut()
+        && let Some(engine) = engine.as_mut()
+    {
+        change(engine);
     }
 }
 

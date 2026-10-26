@@ -347,19 +347,22 @@ fn dismissing_hides_the_fix_for_good() {
 #[test]
 fn the_status_line_follows_the_state() {
     let mut rig = rig(local_only(), true);
-    assert_eq!(rig.engine.status().line, LOCAL_ONLY);
+    assert_eq!(
+        rig.engine.status().line,
+        format!("Checking on {THIS_MACHINE}")
+    );
 
     let keyed = Config {
         openrouter_key: Some("key".into()),
         ..Config::default()
     };
     rig.engine.config = keyed.clone();
+    assert_eq!(rig.engine.status().line, "Gramly is on");
+    rig.engine.ai_error = Some("timeout".into());
     assert_eq!(
         rig.engine.status().line,
-        "Checking with Gemini 3.5 Flash-Lite"
+        format!("AI unavailable, checking on {THIS_MACHINE}")
     );
-    rig.engine.ai_error = Some("timeout".into());
-    assert_eq!(rig.engine.status().line, "Model unavailable: timeout");
 
     rig.engine.config = Config {
         off_in: vec!["app.id".into()],
@@ -374,6 +377,7 @@ fn the_status_line_follows_the_state() {
         ..keyed.clone()
     };
     assert_eq!(rig.engine.status().line, "Paused");
+    assert!(rig.engine.status().paused);
 
     rig.engine.config = keyed;
     rig.engine.toggle_pause();
@@ -409,7 +413,6 @@ fn status_with(change: impl FnOnce(&mut Status)) -> Status {
     let mut status = Status {
         line: String::new(),
         trusted: true,
-        enabled: true,
         ai: false,
         paused: false,
         front: Some(("app.id".into(), "App".into())),
@@ -424,10 +427,7 @@ fn status_with(change: impl FnOnce(&mut Status)) -> Status {
 #[test]
 fn the_pause_item_offers_what_clicking_it_does() {
     assert_eq!(status_with(|_| {}).pause_title(), "Pause for an hour");
-    assert_eq!(
-        status_with(|s| s.paused = true).pause_title(),
-        "Resume checking"
-    );
+    assert_eq!(status_with(|s| s.paused = true).pause_title(), "Resume");
 }
 
 #[test]
@@ -501,12 +501,6 @@ fn a_dismissal_is_keyed_by_the_words_before_it_on_its_line() {
         dismissal(text, &fix(16, 18)),
         ("well".into(), "ok".into(), "OK".into())
     );
-}
-
-#[test]
-fn long_text_is_cut_with_an_ellipsis() {
-    assert_eq!(truncate("short", 48), "short");
-    assert_eq!(truncate("abcdef", 4), "abc…");
 }
 
 const ON_WORD: Point = Point { x: 100.0, y: 108.0 };

@@ -201,17 +201,117 @@ pub fn add_to_dictionary(word: &str) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
+    let ends_unfinished =
+        std::fs::read(&path).is_ok_and(|bytes| bytes.last().is_some_and(|last| *last != b'\n'));
     let mut file = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(path)?;
-    writeln!(file, "{}", word.trim())?;
+    file.write_all(appended(ends_unfinished, word).as_bytes())?;
     Ok(())
+}
+
+/// A file edited by hand may not end in a newline; appended straight on,
+/// the new word joined the last one ("foo" + "bar" became "foobar").
+fn appended(ends_unfinished: bool, word: &str) -> String {
+    let lead = if ends_unfinished { "\n" } else { "" };
+    format!("{lead}{}\n", word.trim())
+}
+
+/// The words as a window lists them: by name, one entry for each spelling
+/// that differs only in case.
+pub fn sorted_dictionary() -> Vec<String> {
+    listed(dictionary())
+}
+
+fn listed(mut words: Vec<String>) -> Vec<String> {
+    words.sort_by_key(|word| word.to_lowercase());
+    words.dedup_by_key(|word| word.to_lowercase());
+    words
+}
+
+/// What typing `input` into the dictionary's field adds: the word, unless
+/// it is empty, has whitespace inside, or is already in `known`.
+fn word_to_add(input: &str, known: &[String]) -> Option<String> {
+    let word = input.trim();
+    let new = !word.is_empty()
+        && !word.contains(char::is_whitespace)
+        && !known
+            .iter()
+            .any(|w| w.to_lowercase() == word.to_lowercase());
+    new.then(|| word.to_string())
+}
+
+/// Adds what was typed into the dictionary's field. Whether the list changed.
+pub fn learn_word(input: &str) -> Result<bool> {
+    let Some(word) = word_to_add(input, &dictionary()) else {
+        return Ok(false);
+    };
+    add_to_dictionary(&word)?;
+    Ok(true)
+}
+
+/// Takes `word` out of the list, in every case, since the window lists the
+/// spellings as one entry. The rest stays as written: saving the sorted,
+/// deduplicated list dropped "zen" when an unrelated word was removed
+/// beside "Zen". Whether it was there.
+pub fn forget_word(word: &str) -> Result<bool> {
+    let words = dictionary();
+    let kept = without(&words, word);
+    let found = kept.len() != words.len();
+    if found {
+        save_dictionary(&kept)?;
+    }
+    Ok(found)
+}
+
+fn without(words: &[String], word: &str) -> Vec<String> {
+    let word = word.to_lowercase();
+    words
+        .iter()
+        .filter(|w| w.to_lowercase() != word)
+        .cloned()
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_word_appended_to_an_unfinished_line_starts_its_own() {
+        assert_eq!(appended(true, " bar "), "\nbar\n");
+        assert_eq!(appended(false, "bar"), "bar\n");
+    }
+
+    #[test]
+    fn removing_a_word_takes_its_spellings_and_leaves_the_rest_as_written() {
+        let words = ["zen", "Hyprland", "Zen", "apple", "hyprland"].map(String::from);
+        assert_eq!(without(&words, "Hyprland"), ["zen", "Zen", "apple"]);
+    }
+
+    #[test]
+    fn the_list_is_sorted_by_name_with_one_entry_per_spelling() {
+        let words = ["zen", "Hyprland", "apple", "hyprland"].map(String::from);
+        assert_eq!(listed(words.to_vec()), ["apple", "Hyprland", "zen"]);
+    }
+
+    #[test]
+    fn a_typed_word_is_trimmed() {
+        assert_eq!(word_to_add("  Hyprland \n", &[]), Some("Hyprland".into()));
+    }
+
+    #[test]
+    fn empty_or_spaced_input_adds_nothing() {
+        assert_eq!(word_to_add("", &[]), None);
+        assert_eq!(word_to_add("   ", &[]), None);
+        assert_eq!(word_to_add("two words", &[]), None);
+    }
+
+    #[test]
+    fn a_known_word_is_not_added_again_whatever_its_case() {
+        assert_eq!(word_to_add("hyprland", &["Hyprland".into()]), None);
+    }
 
     fn scratch(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("gramly-config-{}-{name}", std::process::id()));

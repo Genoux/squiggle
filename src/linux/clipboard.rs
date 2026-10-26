@@ -15,7 +15,7 @@ use std::io::Read;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::{Mutex, MutexGuard, PoisonError};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use wl_clipboard_rs::copy::{self, MimeSource, MimeType, Options, Source};
 use wl_clipboard_rs::paste::{self, ClipboardType, Seat};
 
@@ -151,8 +151,25 @@ fn mime_types() -> Result<Vec<String>, String> {
     }
 }
 
+/// Logs the slow parts: a save that runs out of time is given up on, and
+/// this thread's note is the only account of what held it.
 fn read() -> Result<Saved, String> {
-    saved_all(mime_types()?, contents)
+    let started = Instant::now();
+    let types = mime_types()?;
+    slow("listing the types", started);
+    saved_all(types, |kind| {
+        let asked = Instant::now();
+        let bytes = contents(kind);
+        slow(kind, asked);
+        bytes
+    })
+}
+
+fn slow(what: &str, since: Instant) {
+    let took = since.elapsed();
+    if took >= Duration::from_millis(100) {
+        note!("clipboard: {what} took {}ms", took.as_millis());
+    }
 }
 
 /// Every type with its bytes, or why one could not be read: a clipboard
@@ -236,6 +253,7 @@ fn restore_sources(saved: Saved) -> Vec<MimeSource> {
 
 #[cfg(test)]
 mod tests {
+
     use super::*;
 
     fn kinds(names: &[&str]) -> Vec<String> {
