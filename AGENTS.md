@@ -176,7 +176,14 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
   invisible characters are left out, every space is a plain space, and the
   spaces opening or closing the line are let go; spaces and invisible
   characters together; anything that takes out an inline object (U+FFFC).
-  A doubled space or a tab inside a sentence still shows. A line of only
+  A doubled space or a tab inside a sentence still shows. The model is
+  sent the text without those characters (`protect::visible`) and its
+  fixes are mapped back: given "thi is a lest\u{fffc}\u{fffc}" from a
+  web editor in Zen, it answered "this is a test" three runs in three,
+  each object counted as a changed word, and the answer was refused as a
+  rewrite until the writer typed a period. A fix across an object still
+  holds it once mapped back, so it is still dropped. The card leaves them
+  out of its sentence too: the font drew each as a boxed "OBJ". A line of only
   spaces and invisible characters is blank (`protect::blank`) and is not
   sent to the model. The first fix only covered a zero-width space alone,
   guessed from a screenshot, and missed this; read the field's real text
