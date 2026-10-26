@@ -160,16 +160,23 @@ fn snippet(text: &str, fixes: &[&Fix]) -> Vec<Bit> {
     }
     out.push(Bit::Same(trail(&chars[cursor..to.max(cursor)])));
 
-    // Merged and flattened: a sentence on a card is one line of thought.
+    // Merged and flattened: a sentence on a card is one line of thought. An
+    // editor's inline objects drew as boxed "OBJ" in the card's font.
+    let shown = |s: String| -> String {
+        s.chars()
+            .filter(|c| !gramly_core::protect::invisible(*c))
+            .map(|c| if c == '\n' { ' ' } else { c })
+            .collect()
+    };
     let mut tidy: Vec<Bit> = Vec::new();
     for bit in out {
         match (tidy.last_mut(), bit) {
-            (_, Bit::Same(s)) if s.is_empty() => {}
-            (Some(Bit::Same(prev)), Bit::Same(s)) => prev.push_str(&s.replace('\n', " ")),
-            (_, Bit::Same(s)) => tidy.push(Bit::Same(s.replace('\n', " "))),
+            (Some(Bit::Same(prev)), Bit::Same(s)) => prev.push_str(&shown(s)),
+            (_, Bit::Same(s)) => tidy.push(Bit::Same(shown(s))),
             (_, other) => tidy.push(other),
         }
     }
+    tidy.retain(|bit| !matches!(bit, Bit::Same(s) if s.is_empty()));
     tidy
 }
 
@@ -297,6 +304,21 @@ mod tests {
                 same(" "),
                 Bit::New("receive".into()),
                 same(" the photos?"),
+            ]
+        );
+    }
+
+    #[test]
+    fn objects_that_draw_nothing_are_left_out() {
+        let text = "thi is a lest\u{FFFC}\u{FFFC}";
+        let f = fix(text, "lest", "test");
+        assert_eq!(
+            snippet(text, &[&f]),
+            vec![
+                same("thi is a "),
+                Bit::Gone("lest".into()),
+                same(" "),
+                Bit::New("test".into()),
             ]
         );
     }

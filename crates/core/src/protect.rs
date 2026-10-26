@@ -82,6 +82,16 @@ pub fn blank(text: &str) -> bool {
     text.chars().all(|c| c.is_whitespace() || invisible(c))
 }
 
+/// `text` without the characters that draw nothing, and where each char
+/// kept sits in `text`.
+pub fn visible(text: &str) -> (String, Vec<usize>) {
+    text.chars()
+        .enumerate()
+        .filter(|(_, c)| !invisible(*c))
+        .map(|(at, c)| (c, at))
+        .unzip()
+}
+
 /// A space of any width that is not a tab or a line break: a plain space,
 /// a no-break space, the thin and wide ones.
 fn space(c: char) -> bool {
@@ -92,7 +102,7 @@ fn space(c: char) -> bool {
 /// (zero-width spaces and joiners, direction marks, the byte-order mark, a
 /// soft hyphen), the object replacement, and controls other than tab and
 /// line breaks.
-fn invisible(c: char) -> bool {
+pub fn invisible(c: char) -> bool {
     matches!(
         c,
         '\u{00AD}'

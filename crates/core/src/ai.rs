@@ -138,17 +138,57 @@ pub fn check_on(
     if crate::protect::blank(text) {
         return Ok((Vec::new(), None));
     }
-    let prompt = system_prompt(text, dialect);
-    let answer = router::structured_on(route, key, &prompt, text, &schema(), TIMEOUT)?;
+    let (seen, _) = crate::protect::visible(text);
+    let prompt = system_prompt(&seen, dialect);
+    let answer = router::structured_on(route, key, &prompt, &seen, &schema(), TIMEOUT)?;
     let reply: Reply = serde_json::from_value(answer.value)?;
-    let fixes = crate::diff::fixes(text, &reply.corrected);
-    Ok((crate::diff::final_form(text, fixes), answer.cost))
+    Ok((fixes_from(text, &reply.corrected), answer.cost))
+}
+
+/// The model is shown only what draws. Given an editor's inline objects
+/// (Zen reports "thi is a lest\u{FFFC}\u{FFFC}"), it took them out, each
+/// counted as a changed word, and the answer was refused as a rewrite until
+/// the writer typed a period. A fix across an object still holds it once
+/// mapped back, so `protect::keep` still refuses to delete it.
+fn fixes_from(text: &str, corrected: &str) -> Vec<Fix> {
+    let (seen, at) = crate::protect::visible(text);
+    let place = |offset: usize| at.get(offset).copied().unwrap_or(text.chars().count());
+    let fixes = crate::diff::final_form(&seen, crate::diff::fixes(&seen, corrected));
+    fixes
+        .into_iter()
+        .map(|fix| Fix {
+            start: place(fix.start),
+            end: if fix.end > fix.start {
+                at[fix.end - 1] + 1
+            } else {
+                place(fix.start)
+            },
+            ..fix
+        })
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::fix::apply;
+
+    #[test]
+    fn objects_that_draw_nothing_are_kept_out_of_the_answer() {
+        let text = "thi is a lest\u{FFFC}\u{FFFC}";
+        let fixes = fixes_from(text, "this is a test");
+        assert_eq!(apply(text, &fixes), "This is a test\u{FFFC}\u{FFFC}");
+    }
+
+    #[test]
+    fn a_fix_across_an_object_still_holds_it() {
+        let text = "Pick\u{FFFC}an old ad";
+        let fixes = fixes_from(text, "Pick an old ad");
+        assert!(
+            fixes.iter().all(|fix| fix.start <= 4 && fix.end >= 6),
+            "{fixes:?}"
+        );
+    }
 
     /// Spends a fraction of a cent. `GRAMLY_OPENROUTER_KEY=... cargo test -- --ignored`
     #[test]
