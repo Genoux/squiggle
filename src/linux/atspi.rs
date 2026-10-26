@@ -4,7 +4,11 @@ use crate::surface::{self, Rect, Write};
 use atspi_proxies::accessible::AccessibleProxyBlocking;
 use atspi_proxies::application::ApplicationProxyBlocking;
 use atspi_proxies::bus::{BusProxyBlocking, StatusProxyBlocking};
-use atspi_proxies::common::{CoordType, Interface, ObjectRefOwned, Role, State};
+use atspi_proxies::collection::CollectionProxyBlocking;
+use atspi_proxies::common::{
+    CoordType, Interface, InterfaceSet, MatchType, ObjectMatchRule, ObjectRefOwned, Role,
+    SortOrder, State,
+};
 use atspi_proxies::component::ComponentProxyBlocking;
 use atspi_proxies::registry::RegistryProxyBlocking;
 use atspi_proxies::text::TextProxyBlocking;
@@ -32,6 +36,8 @@ const SETUP_TIMEOUT: Duration = Duration::from_secs(2);
 /// the main loop for another [`CALL_TIMEOUT`].
 const COOLDOWN: Duration = Duration::from_secs(1);
 const WALK_LIMIT: usize = 5000;
+/// A web document holding a focused field is focused and editable too.
+const FOCUS_MATCHES: i32 = 5;
 const FOCUS_EVENT: &str = "object:state-changed:focused";
 const REGISTRY_BUS: &str = "org.a11y.atspi.Registry";
 const ROOT_PATH: &str = "/org/a11y/atspi/accessible/root";
@@ -241,12 +247,12 @@ pub fn from_event(
     }
     let field = Field::from_source(conn, source, at);
     if field.qualifies()? {
-        Some(Some(field))
-    } else if field.is_focused_control() {
-        Some(None)
-    } else {
-        None
+        return Some(Some(field));
     }
+    if let Some(inside) = Field::new(conn, &source.bus, ROOT_PATH, at).focused_in_app() {
+        return Some(Some(inside));
+    }
+    field.is_focused_control().then_some(None)
 }
 
 /// Looks through the tree of the app owning `window` for the focused text
@@ -258,6 +264,10 @@ pub fn walk(
     cancel: &AtomicBool,
 ) -> Result<Field, String> {
     let app = app_of(conn, window, at)?;
+    let root = Field::new(conn, app.name_as_str().unwrap_or_default(), ROOT_PATH, at);
+    if let Some(field) = root.focused_in_app() {
+        return Ok(field);
+    }
     let mut queue = VecDeque::from([(app.clone(), 0)]);
     let (mut visited, mut resolved_below_frames) = (0, 0);
     while let Some((node, depth)) = queue.pop_front() {
@@ -284,7 +294,7 @@ pub fn walk(
             None => {}
         }
     }
-    let toolkit = Field::new(conn, app.name_as_str().unwrap_or_default(), ROOT_PATH, at).toolkit();
+    let toolkit = root.toolkit();
     Err(no_field(
         window,
         toolkit.as_deref(),
@@ -438,6 +448,35 @@ impl Field {
                     && object.get_interfaces().ok()?.contains(Interface::Text)
                     && object.get_role().ok()? != Role::DocumentWeb,
             )
+        })
+    }
+
+    /// The focused text field anywhere in this object's app, in one call,
+    /// where the toolkit offers `Collection` (Gecko does). Zen reports a
+    /// childless panel of its window as focused whenever the window comes
+    /// forward and says nothing of the field still focused inside the page;
+    /// taken as a control, the field was never looked for. Unset criteria
+    /// must be `NA`: at-spi2-atk matches nothing on `Invalid`.
+    fn focused_in_app(&self) -> Option<Field> {
+        let rule = ObjectMatchRule::builder()
+            .states([State::Focused, State::Editable], MatchType::All)
+            .attributes(HashMap::new(), MatchType::NA)
+            .roles(&[], MatchType::NA)
+            .interfaces(InterfaceSet::empty(), MatchType::NA)
+            .build();
+        let matches = self.timed(|| {
+            proxy!(self, CollectionProxyBlocking, ROOT_PATH)
+                .get_matches(rule, SortOrder::Canonical, FOCUS_MATCHES, false)
+                .ok()
+        })?;
+        matches.into_iter().find_map(|node| {
+            let field = Field::new(
+                &self.conn,
+                node.name_as_str()?,
+                node.path_as_str(),
+                &self.at,
+            );
+            field.qualifies()?.then_some(field)
         })
     }
 
