@@ -12,11 +12,12 @@ pub mod menu;
 pub mod theme;
 pub mod write;
 
+use gramly_core::off::{self, Place};
 use gramly_core::{Config, Kind};
 use std::time::Instant;
 
 pub use card::{Action, Bit, Card};
-pub use engine::{DIALECTS, Engine, Status, TICK};
+pub use engine::{DIALECTS, Engine, PAUSES, Status, TICK};
 pub use geometry::{Point, Rect, in_corridor, place_card};
 use write::Paste;
 
@@ -37,6 +38,13 @@ pub enum Write {
 /// A text field in another app. Offsets are `char`s, as Harper reports them;
 /// each platform converts to whatever its accessibility API counts.
 pub trait Field: PartialEq {
+    /// The element alone, to know a field again while Gramly runs: one
+    /// with no id or label is kept off this way; see [`Place`].
+    type Handle: PartialEq;
+    fn handle(&self) -> Self::Handle;
+    /// What the field is known by for "Don't suggest in this field". Asked
+    /// once, when it takes focus.
+    fn place(&self) -> Place;
     fn value(&self) -> Option<String>;
     /// The part of the field actually on screen.
     fn visible_frame(&self) -> Option<Rect>;
@@ -81,10 +89,16 @@ pub trait Host {
     /// Read every tick, so a setting applies on the next pause.
     fn config(&self) -> Config;
     fn trusted(&self) -> bool;
-    /// The app in front as (id, name); `None` while Gramly itself is.
+    /// The app in front as (id, name), for the log; `None` while Gramly
+    /// itself is.
     fn front(&self) -> Option<(String, String)>;
-    /// A terminal, skipped whatever the menu says.
-    fn terminal(&self, id: &str) -> bool;
+    /// The fields turned off from a card, as saved; see [`off`].
+    fn load_off(&self) -> Vec<Place> {
+        off::load()
+    }
+    fn save_off(&self, places: &[Place]) -> anyhow::Result<()> {
+        off::save(places)
+    }
     /// What has keyboard focus, `current` being the field read last tick: a
     /// host can recognise it without asking the app anything about it. Takes
     /// `&mut` because a host may ask each app once to expose its text, and
@@ -124,6 +138,11 @@ pub trait Overlay {
     fn card_rows(&self) -> Vec<(Action, Rect)>;
     /// Lights the row under the pointer.
     fn hover(&mut self, pointer: Point);
+    /// Opens the card's ⋯ menu, or closes it if open. `hide_card` closes it
+    /// too.
+    fn toggle_menu(&mut self);
+    /// The ⋯ menu's frame while it is open: part of the card's corridor.
+    fn menu_frame(&self) -> Option<Rect>;
 }
 
 /// Changes the saved settings. A failed save is logged: the menu has no
@@ -144,6 +163,9 @@ pub fn recent_log(log: &str) -> String {
     lines[lines.len().saturating_sub(LOG_LINES)..].join("\n")
 }
 
+/// Where "add OpenRouter credits…" leads.
+pub const ADD_CREDITS: &str = "https://openrouter.ai/settings/credits";
+
 pub const BAD_KEY: &str = "That does not look like an OpenRouter key";
 
 /// What a key field's text means: no key, a key, or a refusal.
@@ -159,8 +181,7 @@ pub fn parse_key(input: &str) -> Result<Option<String>, &'static str> {
 /// The settings lines `gramly doctor` opens with.
 pub fn config_lines(config: &Config) -> String {
     format!(
-        "checking         {}\nai suggestions   {}\n",
-        if config.enabled { "on" } else { "paused" },
+        "ai suggestions   {}\n",
         match (config.ai, config.openrouter_key.is_some()) {
             (true, true) => "on (key set)",
             (true, false) => "off - no OpenRouter key",

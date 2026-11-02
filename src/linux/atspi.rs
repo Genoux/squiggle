@@ -10,8 +10,10 @@ use atspi_proxies::common::{
     SortOrder, State,
 };
 use atspi_proxies::component::ComponentProxyBlocking;
+use atspi_proxies::document::DocumentProxyBlocking;
 use atspi_proxies::registry::RegistryProxyBlocking;
 use atspi_proxies::text::TextProxyBlocking;
+use gramly_core::off::Place;
 use padding::{app_offset, strip_padding};
 use std::cell::{Cell, OnceCell, RefCell};
 use std::collections::{HashMap, VecDeque};
@@ -551,6 +553,63 @@ impl Field {
         (|| proxy!(self, AccessibleProxyBlocking).get_children().ok())().unwrap_or_default()
     }
 
+    /// The app's name, from the bus's root object: "Firefox", "Slack".
+    fn app_name(&self) -> Option<String> {
+        proxy!(self, AccessibleProxyBlocking, ROOT_PATH)
+            .name()
+            .ok()
+            .filter(|name| !name.trim().is_empty())
+    }
+
+    /// The host of the page a web field is on, from the web document above
+    /// it.
+    fn page_host(&self) -> Option<String> {
+        let mut node = self.parent()?;
+        for _ in 0..ANCESTORS {
+            if node.is_null() {
+                return None;
+            }
+            let above = Field::new(
+                &self.conn,
+                node.name_as_str()?,
+                node.path_as_str(),
+                &self.at,
+            );
+            if above.role()? == Role::DocumentWeb {
+                let url = proxy!(above, DocumentProxyBlocking)
+                    .get_attribute_value("DocURL")
+                    .ok()?;
+                return host_of(&url);
+            }
+            node = above.parent()?;
+        }
+        None
+    }
+
+    /// Its id and its first label: the DOM id Gecko and Chromium list among
+    /// its attributes, or the toolkit's own; its name, description or
+    /// placeholder.
+    fn names(&self) -> Option<(String, String)> {
+        let object = proxy!(self, AccessibleProxyBlocking);
+        let attributes = object.get_attributes().unwrap_or_default();
+        let id = attributes
+            .get("id")
+            .cloned()
+            .or_else(|| object.accessible_id().ok())
+            .unwrap_or_default();
+        let label = [
+            object.name().ok(),
+            object.description().ok(),
+            attributes.get("placeholder-text").cloned(),
+        ]
+        .into_iter()
+        .flatten()
+        .map(|label| label.trim().to_string())
+        .find(|label| !label.is_empty())
+        .unwrap_or_default();
+        Some((id.trim().to_string(), label))
+    }
+
     /// The toolkit of the app this field is in, from the bus's root object.
     fn toolkit(&self) -> Option<String> {
         proxy!(self, ApplicationProxyBlocking, ROOT_PATH)
@@ -587,6 +646,30 @@ impl Field {
 }
 
 impl surface::Field for Field {
+    type Handle = (String, String);
+
+    fn handle(&self) -> (String, String) {
+        (self.bus.clone(), self.path.clone())
+    }
+
+    /// The app, the page's host for a web field, its id and its first
+    /// label.
+    fn place(&self) -> Place {
+        let app = self.timed(|| self.app_name()).unwrap_or_default();
+        let site = if self.is_web() {
+            self.timed(|| self.page_host()).unwrap_or_default()
+        } else {
+            String::new()
+        };
+        let (id, label) = self.timed(|| self.names()).unwrap_or_default();
+        let who = if site.is_empty() {
+            app.clone()
+        } else {
+            site.clone()
+        };
+        Place::new(app, site, id, label, &who)
+    }
+
     fn value(&self) -> Option<String> {
         self.timed(|| self.read_value())
     }
@@ -650,9 +733,31 @@ impl PartialEq for Field {
     }
 }
 
+/// The host part of a URL: "github.com" from "https://github.com/a/b".
+fn host_of(url: &str) -> Option<String> {
+    let rest = url.split_once("://")?.1;
+    let authority = rest.split(['/', '?', '#']).next()?;
+    let host = authority.rsplit('@').next()?.split(':').next()?;
+    (!host.is_empty()).then(|| host.to_lowercase())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_page_is_known_by_its_host() {
+        assert_eq!(
+            host_of("https://github.com/Genoux/gramly/pull/7#top").as_deref(),
+            Some("github.com")
+        );
+        assert_eq!(
+            host_of("http://user@Example.org:8080/?q=1").as_deref(),
+            Some("example.org")
+        );
+        assert_eq!(host_of("about:blank"), None);
+        assert_eq!(host_of("file:///home/john/a.html"), None);
+    }
 
     fn window() -> Window {
         Window {

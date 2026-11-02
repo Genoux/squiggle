@@ -44,10 +44,6 @@ impl Host for MacHost {
         ax::frontmost_app()
     }
 
-    fn terminal(&self, id: &str) -> bool {
-        ax::terminal(id)
-    }
-
     fn focus(&mut self, current: Option<&ax::Field>) -> Focus<ax::Field> {
         let front_pid = ax::frontmost_pid();
         if front_pid != self.front_pid {

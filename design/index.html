@@ -123,6 +123,16 @@
 
   .g-card { width: 340px; max-width: 100%; padding: 16px; border-radius: var(--corner); background: var(--surface); box-shadow: var(--shadow); }
   .g-head { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 500; line-height: 18px; color: var(--text2); }
+  .g-title { flex: 1; min-width: 0; }
+  .g-more { width: 24px; height: 24px; margin: -3px -6px -3px 0; display: grid; place-items: center; border-radius: var(--corner-control); color: var(--text2); flex: none; }
+  .g-more:hover, .g-more.is-hover { background: var(--fill); }
+  .g-more svg, .g-menu svg { width: 14px; height: 14px; }
+  .g-menu-wrap { position: relative; width: 340px; max-width: 100%; }
+  .g-menu { position: absolute; top: 40px; right: 6px; width: 240px; padding: 4px; border-radius: var(--corner); background: var(--surface); box-shadow: var(--shadow); }
+  .g-menu button { width: 100%; height: 32px; display: flex; align-items: center; gap: 10px; padding: 0 10px; border-radius: var(--corner-control); font-size: 13.5px; font-weight: 500; text-align: left; color: var(--text); }
+  .g-menu button:hover, .g-menu button.is-hover { background: var(--fill); }
+  .g-menu svg { width: 15px; height: 15px; color: var(--text2); flex: none; }
+  .g-menu hr { border: 0; height: 1px; margin: 4px 6px; background: var(--line); }
   .g-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--mistake); flex: none; }
   .advice .g-dot { background: var(--advice); }
   .g-text { margin-top: 10px; font-size: 15px; line-height: 24px; text-wrap: pretty; }
@@ -201,6 +211,9 @@
 </head>
 <body>
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="dots" viewBox="0 0 16 16"><g fill="currentColor"><circle cx="3" cy="8" r="1.4"/><circle cx="8" cy="8" r="1.4"/><circle cx="13" cy="8" r="1.4"/></g></symbol>
+  <symbol id="off" viewBox="0 0 16 16"><g fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><circle cx="8" cy="8" r="6"/><path d="M3.8 12.2l8.4-8.4"/></g></symbol>
+  <symbol id="pause" viewBox="0 0 16 16"><g fill="none" stroke="currentColor" stroke-width="1.4"><rect x="4" y="3" width="2.6" height="10" rx=".8"/><rect x="9.4" y="3" width="2.6" height="10" rx=".8"/></g></symbol>
   <symbol id="x" viewBox="0 0 16 16"><path d="M4.5 4.5l7 7M11.5 4.5l-7 7" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
 </svg>
 
@@ -308,7 +321,7 @@
       <div class="bar"><span>Spacing</span><div class="seg" role="group" aria-label="Spacing"><button type="button" data-key="spacing" data-val="off">Hide</button><button type="button" data-key="spacing" data-val="on">Show</button></div></div>
       <div class="well spaced">
         <div class="g g-card">
-          <div class="g-head"><span class="g-dot"></span>Correct your spelling</div>
+          <div class="g-head"><span class="g-dot"></span><span class="g-title">Correct your spelling</span><button class="g-more" type="button" aria-label="More"><svg><use href="#dots"/></svg></button></div>
           <p class="g-text">Did you <del>recieve</del> <ins>receive</ins> the photos?</p>
           <div class="g-actions"><button class="g-btn main" type="button">Accept</button><button class="g-btn" type="button">Dismiss</button><button class="g-btn" type="button">Add to dictionary</button></div>
         </div>
@@ -318,6 +331,8 @@
         <li><span>Card gaps</span><span>10 under the title · 16 above the buttons</span></li>
         <li><span>Buttons</span><span>32 high · 12 at the sides · 8 apart</span></li>
         <li><span>The dot</span><span>7, centred on the title's 18 line</span></li>
+        <li><span>The ⋯</span><span>24 square, 6 past the padding</span></li>
+        <li><span>The ⋯'s menu</span><span>240 wide · 4 padding · items 32</span></li>
         <li><span>The sentence</span><span>6 words of context either side</span></li>
         <li><span>Underline</span><span>2 high, the word's width</span></li>
         <li><span>Dictionary</span><span>320 × 460 · 16 padding · rows 36</span></li>
@@ -345,7 +360,7 @@
       <div class="well">
         <div class="row">
           <div class="stage"><div class="g g-card" id="arrive">
-            <div class="g-head"><span class="g-dot"></span>Correct your spelling</div>
+            <div class="g-head"><span class="g-dot"></span><span class="g-title">Correct your spelling</span><button class="g-more" type="button" aria-label="More"><svg><use href="#dots"/></svg></button></div>
             <p class="g-text">Did you <del>recieve</del> <ins>receive</ins> the photos?</p>
             <div class="g-actions"><button class="g-btn main" type="button">Accept</button><button class="g-btn" type="button">Dismiss</button></div>
           </div></div>
@@ -382,33 +397,45 @@
 
     <section id="card">
       <h2>Card</h2>
-      <p>One card for every suggestion. From top to bottom: a dot in the underline's colour and a title, the sentence with the change in place, then a row of buttons with the main one first. Spelling adds "Add to dictionary". Two or more fixes in a sentence become "Correct the sentence". A change of spaces alone shows as <span class="g">␣</span>.</p>
+      <p>One card for every suggestion. From top to bottom: a dot in the underline's colour and a title, the sentence with the change in place, then a row of buttons with the main one first. Spelling adds "Add to dictionary". Two or more fixes in a sentence become "Correct the sentence". A change of spaces alone shows as <span class="g">␣</span>. The ⋯ at the title's end opens the card's menu.</p>
       <div class="well">
         <div class="row">
           <div><p class="label">Spelling</p><div class="g g-card">
-            <div class="g-head"><span class="g-dot"></span>Correct your spelling</div>
+            <div class="g-head"><span class="g-dot"></span><span class="g-title">Correct your spelling</span><button class="g-more" type="button" aria-label="More"><svg><use href="#dots"/></svg></button></div>
             <p class="g-text">Did you <del>recieve</del> <ins>receive</ins> the photos?</p>
             <div class="g-actions"><button class="g-btn main" type="button">Accept</button><button class="g-btn" type="button">Dismiss</button><button class="g-btn" type="button">Add to dictionary</button></div>
           </div></div>
           <div><p class="label">A word taken out</p><div class="g g-card">
-            <div class="g-head"><span class="g-dot"></span>Correct your grammar</div>
+            <div class="g-head"><span class="g-dot"></span><span class="g-title">Correct your grammar</span><button class="g-more" type="button" aria-label="More"><svg><use href="#dots"/></svg></button></div>
             <p class="g-text">Can you send me the <del>the</del> link for the frame.io draft when…</p>
             <div class="g-actions"><button class="g-btn main" type="button">Accept</button><button class="g-btn" type="button">Dismiss</button></div>
           </div></div>
           <div><p class="label">Several fixes in one sentence</p><div class="g g-card">
-            <div class="g-head"><span class="g-dot"></span>Correct the sentence</div>
+            <div class="g-head"><span class="g-dot"></span><span class="g-title">Correct the sentence</span><button class="g-more" type="button" aria-label="More"><svg><use href="#dots"/></svg></button></div>
             <p class="g-text"><del>i</del> <ins>I</ins> went to <del>paris</del> <ins>Paris</ins> on <del>monday</del> <ins>Monday</ins> and it was great.</p>
             <div class="g-actions"><button class="g-btn main" type="button">Correct the sentence</button><button class="g-btn" type="button">Dismiss</button></div>
           </div></div>
           <div><p class="label">Clearer wording</p><div class="g g-card advice">
-            <div class="g-head"><span class="g-dot"></span>Improve your text</div>
+            <div class="g-head"><span class="g-dot"></span><span class="g-title">Improve your text</span><button class="g-more" type="button" aria-label="More"><svg><use href="#dots"/></svg></button></div>
             <p class="g-text">I think <del>it would maybe be better if we could try to</del> <ins>we should</ins> move the meeting to Thursday instead.</p>
             <div class="g-actions"><button class="g-btn main" type="button">Accept</button><button class="g-btn" type="button">Dismiss</button></div>
           </div></div>
           <div><p class="label">Spacing</p><div class="g g-card">
-            <div class="g-head"><span class="g-dot"></span>Correct your spacing</div>
+            <div class="g-head"><span class="g-dot"></span><span class="g-title">Correct your spacing</span><button class="g-more" type="button" aria-label="More"><svg><use href="#dots"/></svg></button></div>
             <p class="g-text">So yes<del>␣</del> was the answer.</p>
             <div class="g-actions"><button class="g-btn main" type="button">Accept</button><button class="g-btn" type="button">Dismiss</button></div>
+          </div></div>
+          <div><p class="label">The ⋯'s menu, open</p><div class="g-menu-wrap" style="height: 230px">
+            <div class="g g-card">
+              <div class="g-head"><span class="g-dot"></span><span class="g-title">Correct your spelling</span><button class="g-more is-hover" type="button" aria-label="More"><svg><use href="#dots"/></svg></button></div>
+              <p class="g-text">Did you <del>recieve</del> <ins>receive</ins> the photos?</p>
+              <div class="g-actions"><button class="g-btn main" type="button">Accept</button><button class="g-btn" type="button">Dismiss</button><button class="g-btn" type="button">Add to dictionary</button></div>
+            </div>
+            <div class="g g-menu">
+              <button class="is-hover" type="button"><svg><use href="#off"/></svg>Don't suggest in this field</button>
+              <hr>
+              <button type="button"><svg><use href="#pause"/></svg>Pause everywhere for an hour</button>
+            </div>
           </div></div>
         </div>
       </div>

@@ -6,12 +6,12 @@ that is misbehaving, and read what it says.
 
 ## Nothing is underlined anywhere
 
-- **Accessibility is not allowed.** The menu says *Needs Accessibility access*.
+- **Accessibility is not allowed.** The menu starts with *Grant Accessibility access…*.
   System Settings → Privacy & Security → Accessibility → enable Gramly.
 - **After an update it stopped working.** macOS ties the grant to the app's
   signature, and each install signs it anew. Remove Gramly from the
   Accessibility list with **−**, then add it back (or toggle it off and on).
-- **It is paused.** The menu says *Paused*; menu → *Resume*.
+- **It is paused.** The menu says *Paused until …*; click *Resume*.
 
 ## Nothing is underlined in one app
 
@@ -27,8 +27,15 @@ that is misbehaving, and read what it says.
 
 ## Only spelling is caught, never the subtler mistakes
 
-AI suggestions need a key: menu → *OpenRouter key…*. The first menu line says
-*Gramly is on* when it is working, or *AI unavailable* when it is not (the log has the reason).
+AI suggestions need a key: menu → *OpenRouter key…*. Out of credits or with a
+key OpenRouter refuses, the menu says so under its name (*AI suggestions
+stopped: …*), and Gramly keeps checking on this computer meanwhile. For any
+other failure, *Copy recent log* has the reason ("model check failed").
+
+## Nothing is underlined in one field
+
+It may have been turned off from a card's ⋯. Menu → *Off in N fields* lists
+them; click one to turn it back on.
 
 ## Accept does nothing, or pastes something else
 

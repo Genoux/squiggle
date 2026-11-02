@@ -124,13 +124,6 @@ fn local_loop(rx: Receiver<Request>, model: [Sender<Request>; 2], out: Sender<Ou
         // added or a switch flipped applies on the next pause, not the next
         // launch. The files are a few hundred bytes.
         let config = Config::load().unwrap_or_default();
-        if !config.enabled {
-            let _ = out.send(Outcome::Local {
-                generation: request.generation,
-                fixes: Vec::new(),
-            });
-            continue;
-        }
         let wanted = config.harper_dialect();
         if dialect != Some(wanted) {
             local = Some(Local::new(wanted));

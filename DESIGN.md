@@ -66,6 +66,8 @@ and bold green on a fill for what comes; then a row of buttons.
 - Every button is 32 high, 12 at the sides. The main one is solid ink; the
   others are outlined and fill in under the pointer.
 - The sentence is cut to six words either side of the change.
+- A ⋯ at the title's end, 24 square, opens the card's menu: 240 wide, 4
+  padding, items 32 high with an icon, in the card's surface and shadow.
 - It fades in over 140ms, moving its last 3pt towards its word. Nothing
   else moves.
 

@@ -164,6 +164,10 @@ impl<H: Host, O: Overlay> Engine<H, O> {
             return false;
         };
         in_corridor(card, word, pointer)
+            || self
+                .overlay
+                .menu_frame()
+                .is_some_and(|menu| menu.contains(pointer))
     }
 
     /// The pointer is off every word: the card closes once it has been out of the

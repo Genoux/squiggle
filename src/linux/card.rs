@@ -3,8 +3,9 @@
 //! Buttons light under the pointer through `:hover`, because the card is a
 //! real surface that gets pointer events.
 
-use super::overlay::fill;
-use crate::surface::theme::{self, Face, Palette, Rgba, Shadow};
+use super::overlay::{fill, rounded};
+use crate::surface::card::MENU;
+use crate::surface::theme::{self, Face, Palette, Rgba, Shadow, Shape};
 use crate::surface::{Action, Bit, Card, Rect};
 use gramly_core::Kind;
 use gtk::prelude::*;
@@ -19,6 +20,9 @@ pub type OnAction = Rc<dyn Fn(Action, usize)>;
 pub struct Built {
     pub root: gtk::Box,
     pub rows: Vec<(Action, gtk::Widget)>,
+    /// The ⋯ and its menu, hidden until the ⋯ is clicked.
+    pub more: gtk::Button,
+    pub menu: gtk::Box,
 }
 
 /// Sizes the card to its content and returns that size. Called once it is
@@ -93,7 +97,12 @@ fn cards_css(p: &Palette) -> String {
          button.gramly-main:hover {{ background-color: {ink_hover}; }}
          button.gramly-main label {{ color: {on_ink}; {button_main} }}
          button.gramly-plain {{ border-color: {line}; }}
-         button.gramly-plain:hover {{ background-color: {fill}; border-color: {clear}; }}",
+         button.gramly-plain:hover {{ background-color: {fill}; border-color: {clear}; }}
+         button.gramly-more, button.gramly-item {{ all: unset; border-radius: {control}px; transition: background-color {hover}ms; }}
+         button.gramly-more:hover, button.gramly-more.gramly-open, button.gramly-item:hover {{ background-color: {fill}; }}
+         button.gramly-item label {{ color: {text}; {button} }}
+         .gramly-menu {{ background-color: {surface}; border: {edge}px solid {edge_color}; border-radius: {corner}px; box-shadow: {tight}, {soft}; padding: {menu_pad}px; }}
+         .gramly-rule {{ background-color: {line}; }}",
         family = theme::FONT_FAMILY,
         surface = p.surface.css(),
         edge = edge_width(),
@@ -119,6 +128,7 @@ fn cards_css(p: &Palette) -> String {
         button_main = font(theme::BUTTON_MAIN),
         line = p.line.css(),
         fill = p.fill.css(),
+        menu_pad = theme::MENU_PAD as i32 - edge_width(),
     )
 }
 
@@ -266,6 +276,8 @@ fn heading(card: &Card) -> gtk::Box {
     title.set_xalign(0.0);
     title.set_hexpand(true);
     title.set_margin_start((theme::TITLE_INDENT - theme::DOT) as i32);
+    // Room for the ⋯, laid over the title's end.
+    title.set_margin_end((theme::MORE - theme::MORE_OUT + theme::BETWEEN_BUTTONS) as i32);
     title.set_ellipsize(gtk::pango::EllipsizeMode::End);
 
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
@@ -313,6 +325,129 @@ fn button(action: Action, primary: bool, index: usize, on_action: &OnAction) -> 
     button
 }
 
+/// An icon from `theme::icon`, `size` square, in `color`.
+fn glyph(action: Action, size: f64, color: Rgba) -> gtk::DrawingArea {
+    let area = gtk::DrawingArea::new();
+    area.set_content_width(size as i32);
+    area.set_content_height(size as i32);
+    area.set_halign(gtk::Align::Center);
+    area.set_valign(gtk::Align::Center);
+    area.set_can_target(false);
+    area.set_draw_func(move |_, context, _, _| {
+        let s = size / 16.0;
+        context.set_source_rgba(color.r, color.g, color.b, color.a);
+        context.set_line_width(theme::ICON_STROKE * s);
+        context.set_line_cap(gtk::cairo::LineCap::Round);
+        for shape in theme::icon(action) {
+            context.new_path();
+            let filled = match *shape {
+                Shape::Dot { x, y, r } => {
+                    context.arc(x * s, y * s, r * s, 0.0, std::f64::consts::TAU);
+                    true
+                }
+                Shape::Ring { x, y, r } => {
+                    context.arc(x * s, y * s, r * s, 0.0, std::f64::consts::TAU);
+                    false
+                }
+                Shape::Line { from, to } => {
+                    context.move_to(from.0 * s, from.1 * s);
+                    context.line_to(to.0 * s, to.1 * s);
+                    false
+                }
+                Shape::Bar { x, y, w, h, r } => {
+                    let bar = Rect {
+                        x: x * s,
+                        y: y * s,
+                        w: w * s,
+                        h: h * s,
+                    };
+                    rounded(context, bar, r * s);
+                    false
+                }
+            };
+            // A failed stroke draws nothing, and there is nothing to do.
+            let _ = if filled {
+                context.fill()
+            } else {
+                context.stroke()
+            };
+        }
+    });
+    area
+}
+
+fn plain(button: &gtk::Button, class: &str, action: Action, index: usize, on_action: &OnAction) {
+    button.set_focusable(false);
+    button.set_focus_on_click(false);
+    button.set_cursor_from_name(Some("pointer"));
+    button.add_css_class(class);
+    let on_action = Rc::clone(on_action);
+    button.connect_clicked(move |_| on_action(action, index));
+}
+
+/// The ⋯ at the title's end, laid over the card.
+fn more(index: usize, on_action: &OnAction, p: &Palette) -> gtk::Button {
+    let button = gtk::Button::new();
+    plain(&button, "gramly-more", Action::More, index, on_action);
+    button.set_size_request(theme::MORE as i32, theme::MORE as i32);
+    button.set_halign(gtk::Align::End);
+    button.set_valign(gtk::Align::Start);
+    // From inside the card's hairline, as the column's margins are.
+    let inset = edge_width();
+    button.set_margin_end((theme::CARD_PAD - theme::MORE_OUT) as i32 - inset);
+    button
+        .set_margin_top((theme::CARD_PAD + (theme::TITLE_LINE - theme::MORE) / 2.0) as i32 - inset);
+    button.set_child(Some(&glyph(Action::More, theme::MORE_ICON, p.text2)));
+    button
+}
+
+/// The ⋯'s menu, where `theme::menu_at` puts it, hidden.
+fn menu(index: usize, on_action: &OnAction, p: &Palette) -> (gtk::Box, Vec<(Action, gtk::Widget)>) {
+    let at = theme::menu_at(Rect {
+        x: 0.0,
+        y: 0.0,
+        w: 0.0,
+        h: 0.0,
+    });
+    let menu = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    menu.add_css_class("gramly-menu");
+    menu.set_visible(false);
+    menu.set_halign(gtk::Align::End);
+    menu.set_valign(gtk::Align::Start);
+    let inset = edge_width();
+    menu.set_margin_end(theme::MENU_INSET as i32 - inset);
+    menu.set_margin_top(at.y as i32 - inset);
+    menu.set_size_request(at.w as i32, at.h as i32);
+    let mut rows = Vec::new();
+    for (i, action) in MENU.into_iter().enumerate() {
+        if i > 0 {
+            let rule = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+            rule.add_css_class("gramly-rule");
+            rule.set_height_request(1);
+            let space = ((theme::MENU_RULE - 1.0) / 2.0) as i32;
+            rule.set_margin_top(space);
+            rule.set_margin_bottom(space);
+            rule.set_margin_start(6);
+            rule.set_margin_end(6);
+            menu.append(&rule);
+        }
+        let item = gtk::Button::new();
+        plain(&item, "gramly-item", action, index, on_action);
+        item.set_height_request(theme::BUTTON_HEIGHT as i32);
+        let row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+        row.set_margin_start((theme::BUTTON_SIDE - 2.0) as i32);
+        row.append(&glyph(action, theme::MENU_ICON, p.text2));
+        let caption = gtk::Label::new(Some(action.label()));
+        caption.set_xalign(0.0);
+        caption.set_valign(gtk::Align::Center);
+        row.append(&caption);
+        item.set_child(Some(&row));
+        menu.append(&item);
+        rows.push((action, item.upcast()));
+    }
+    (menu, rows)
+}
+
 pub fn build(card: &Card, index: usize, on_action: &OnAction, p: &'static Palette) -> Built {
     let buttons: Vec<(Action, gtk::Button)> = card
         .actions
@@ -347,21 +482,36 @@ pub fn build(card: &Card, index: usize, on_action: &OnAction, p: &'static Palett
     column.append(&sentence);
     column.append(&stack);
 
+    let more = more(index, on_action, p);
+    let (menu, menu_rows) = menu(index, on_action, p);
+    // The ⋯ and its menu lie over the card's words; neither changes its
+    // size.
+    let layers = gtk::Overlay::new();
+    layers.set_child(Some(&column));
+    layers.add_overlay(&more);
+    layers.add_overlay(&menu);
+
     let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
     root.add_css_class("gramly-card");
-    root.append(&column);
+    root.append(&layers);
     // The shadow is the card's own, and falls in this margin of the surface.
     let (left, right, top, bottom) = theme::SHADE;
     root.set_margin_start(left as i32);
     root.set_margin_end(right as i32);
     root.set_margin_top(top as i32);
     root.set_margin_bottom(bottom as i32);
+    let mut rows = vec![(Action::More, more.clone().upcast())];
+    rows.extend(
+        buttons
+            .into_iter()
+            .map(|(action, button)| (action, button.upcast())),
+    );
+    rows.extend(menu_rows);
     Built {
         root,
-        rows: buttons
-            .into_iter()
-            .map(|(action, button)| (action, button.upcast()))
-            .collect(),
+        rows,
+        more,
+        menu,
     }
 }
 

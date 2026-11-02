@@ -9,7 +9,7 @@
 //! too. The values are the ones in design/tokens.json; a test holds them
 //! together.
 
-use super::Mark;
+use super::{Mark, Rect};
 use gramly_core::Kind;
 use std::time::Duration;
 
@@ -205,6 +205,119 @@ pub const TITLE_INDENT: f64 = 15.0;
 pub const DOT: f64 = 7.0;
 /// A hairline: half a point is one pixel on a Retina screen.
 pub const EDGE_WIDTH: f64 = 0.5;
+/// The ⋯ at the title's end: square, reaching `MORE_OUT` past the padding
+/// so its dots line up with the card's edge of text. Its dots are drawn
+/// `MORE_ICON` square.
+pub const MORE: f64 = 24.0;
+pub const MORE_OUT: f64 = 6.0;
+pub const MORE_ICON: f64 = 14.0;
+
+/// The ⋯'s menu: its width, the space around its items, how far in from
+/// the card's right edge and how far under the title it opens, and the
+/// rule between its items with the space either side. Items are a button
+/// high, an icon `MENU_ICON` square and its words.
+pub const MENU_WIDTH: f64 = 240.0;
+pub const MENU_PAD: f64 = 4.0;
+pub const MENU_INSET: f64 = 6.0;
+pub const MENU_DROP: f64 = 6.0;
+pub const MENU_RULE: f64 = 9.0;
+pub const MENU_ICON: f64 = 15.0;
+
+/// A piece of an icon, on a 16-point grid with y growing down. Shapes are
+/// stroked `ICON_STROKE` wide with round caps, dots filled, all in the
+/// colour of the words beside them.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Shape {
+    Dot {
+        x: f64,
+        y: f64,
+        r: f64,
+    },
+    Ring {
+        x: f64,
+        y: f64,
+        r: f64,
+    },
+    Line {
+        from: (f64, f64),
+        to: (f64, f64),
+    },
+    Bar {
+        x: f64,
+        y: f64,
+        w: f64,
+        h: f64,
+        r: f64,
+    },
+}
+
+pub const ICON_STROKE: f64 = 1.4;
+
+/// The icon each of the ⋯'s parts shows: three dots for the ⋯ itself, a
+/// circle struck through for no suggestions here, two bars for pause.
+pub fn icon(action: crate::surface::Action) -> &'static [Shape] {
+    use crate::surface::Action;
+    match action {
+        Action::More => &[
+            Shape::Dot {
+                x: 3.0,
+                y: 8.0,
+                r: 1.4,
+            },
+            Shape::Dot {
+                x: 8.0,
+                y: 8.0,
+                r: 1.4,
+            },
+            Shape::Dot {
+                x: 13.0,
+                y: 8.0,
+                r: 1.4,
+            },
+        ],
+        Action::OffHere => &[
+            Shape::Ring {
+                x: 8.0,
+                y: 8.0,
+                r: 6.0,
+            },
+            Shape::Line {
+                from: (3.8, 12.2),
+                to: (12.2, 3.8),
+            },
+        ],
+        Action::PauseHour => &[
+            Shape::Bar {
+                x: 4.0,
+                y: 3.0,
+                w: 2.6,
+                h: 10.0,
+                r: 0.8,
+            },
+            Shape::Bar {
+                x: 9.4,
+                y: 3.0,
+                w: 2.6,
+                h: 10.0,
+                r: 0.8,
+            },
+        ],
+        _ => &[],
+    }
+}
+
+/// Where the ⋯'s menu opens over `card`: right-aligned under the ⋯, just
+/// below the title. Top-left origin, as the engine's rectangles are; the
+/// shortest card is taller than the menu reaches, so it stays on the card.
+pub fn menu_at(card: Rect) -> Rect {
+    let items = crate::surface::card::MENU.len() as f64;
+    Rect {
+        x: card.x + card.w - MENU_INSET - MENU_WIDTH,
+        y: card.y + CARD_PAD + TITLE_LINE + MENU_DROP,
+        w: MENU_WIDTH,
+        h: MENU_PAD * 2.0 + BUTTON_HEIGHT * items + MENU_RULE * (items - 1.0),
+    }
+}
 
 /// The dictionary window.
 pub const DICTIONARY_WIDTH: f64 = 320.0;
@@ -502,6 +615,9 @@ pub(crate) mod tokens {
             ("card.title_line", TITLE_LINE),
             ("card.title_indent", TITLE_INDENT),
             ("card.dot", DOT),
+            ("card.more", MORE),
+            ("menu.width", MENU_WIDTH),
+            ("menu.padding", MENU_PAD),
             ("card.context_words", crate::surface::card::CONTEXT as f64),
             ("button.height", BUTTON_HEIGHT),
             ("button.side", BUTTON_SIDE),

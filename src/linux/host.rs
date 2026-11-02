@@ -195,8 +195,7 @@ impl Host for LinuxHost {
         true
     }
 
-    /// The class is the id: Hyprland has no stable app id apart from it, and
-    /// `off_in` holds it. The name is only for the menu.
+    /// The class is the id: Hyprland has no stable app id apart from it.
     fn front(&self) -> Option<(String, String)> {
         let class = hypr::active_window()?.class;
         let name = self
@@ -206,10 +205,6 @@ impl Host for LinuxHost {
             .or_insert_with(|| display_name(&class))
             .clone();
         Some((class, name))
-    }
-
-    fn terminal(&self, id: &str) -> bool {
-        atspi::terminal(id)
     }
 
     /// Another window in front is an answer, not a miss: Hyprland reports it

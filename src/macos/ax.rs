@@ -8,10 +8,11 @@
 use crate::surface::write::{classify, read_back, settle};
 use crate::surface::{self, Field as _, Focus, Rect, Write};
 use gramly_core::fix::utf16_range;
+use gramly_core::off::Place;
 use objc2_app_kit::NSRunningApplication;
 use objc2_application_services::{AXError, AXUIElement, AXValue, AXValueType};
 use objc2_core_foundation::{
-    CFBoolean, CFDictionary, CFRange, CFRetained, CFString, CFType, CGPoint, CGRect, CGSize,
+    CFBoolean, CFDictionary, CFRange, CFRetained, CFString, CFType, CFURL, CGPoint, CGRect, CGSize,
 };
 use std::ffi::c_void;
 use std::ptr::NonNull;
@@ -103,6 +104,15 @@ struct Segment {
     element: CFRetained<AXUIElement>,
 }
 
+/// A field's element alone; see [`surface::Field::handle`].
+pub struct Handle(CFRetained<AXUIElement>);
+
+impl PartialEq for Handle {
+    fn eq(&self, other: &Self) -> bool {
+        *self.0 == *other.0
+    }
+}
+
 impl PartialEq for Field {
     fn eq(&self, other: &Self) -> bool {
         // CFEqual on AXUIElements compares the remote object, not the wrapper.
@@ -173,15 +183,30 @@ fn bundle_id(pid: i32) -> String {
         .unwrap_or_default()
 }
 
+/// The host of the page a web field is on, from the nearest web area above
+/// it. Electron apps have one too ("app.slack.com").
+fn page_host(element: &AXUIElement) -> Option<String> {
+    let mut at = attribute(element, "AXParent")?
+        .downcast::<AXUIElement>()
+        .ok()?;
+    for _ in 0..60 {
+        if string_attribute(&at, "AXRole").as_deref() == Some("AXWebArea") {
+            let url = attribute(&at, "AXURL")?.downcast::<CFURL>().ok()?;
+            return url.host_name().map(|host| host.to_string());
+        }
+        at = attribute(&at, "AXParent")?.downcast::<AXUIElement>().ok()?;
+    }
+    None
+}
+
 pub fn frontmost_pid() -> Option<i32> {
     objc2_app_kit::NSWorkspace::sharedWorkspace()
         .frontmostApplication()
         .map(|app| app.processIdentifier())
 }
 
-/// The app in front as (bundle id, name), for the menu's "Turn off in ...".
-/// None while Gramly itself is in front: it comes forward only for its own
-/// dialogs, which are not what the item means.
+/// The app in front as (bundle id, name), for the log. None while Gramly
+/// itself is in front: it comes forward only for its own dialogs.
 pub fn frontmost_app() -> Option<(String, String)> {
     let app = objc2_app_kit::NSWorkspace::sharedWorkspace().frontmostApplication()?;
     if app.processIdentifier() == std::process::id() as i32 {
@@ -203,11 +228,6 @@ pub fn frontmost_window_title() -> Option<String> {
     let window = attribute(&app, "AXFocusedWindow")?;
     let window = window.downcast_ref::<AXUIElement>()?;
     string_attribute(window, "AXTitle")
-}
-
-/// A terminal, skipped whatever the menu says.
-pub fn terminal(bundle_id: &str) -> bool {
-    SKIPPED_APPS.contains(&bundle_id)
 }
 
 /// Asks an app to expose its text. Electron apps (Slack, Discord, VS Code,
@@ -761,7 +781,53 @@ impl Field {
     }
 }
 
+impl Field {
+    /// Its placeholder, description and title, those it has, read once.
+    fn labels(&self) -> &[String] {
+        self.labels.get_or_init(|| {
+            ["AXPlaceholderValue", "AXDescription", "AXTitle"]
+                .into_iter()
+                .filter_map(|name| string_attribute(&self.element, name))
+                .map(|label| label.trim().to_string())
+                .filter(|label| !label.is_empty())
+                .collect()
+        })
+    }
+}
+
 impl surface::Field for Field {
+    type Handle = Handle;
+
+    fn handle(&self) -> Handle {
+        Handle(self.element.clone())
+    }
+
+    /// The app, the page's host for a web field, its id and its first
+    /// label.
+    fn place(&self) -> Place {
+        let app = bundle_id(self.pid);
+        let site = if web(&self.element) {
+            page_host(&self.element).unwrap_or_default()
+        } else {
+            String::new()
+        };
+        let id = ["AXIdentifier", "AXDOMIdentifier"]
+            .into_iter()
+            .filter_map(|name| string_attribute(&self.element, name))
+            .find(|id| !id.trim().is_empty())
+            .unwrap_or_default();
+        let label = self.labels().first().cloned().unwrap_or_default();
+        let who = if site.is_empty() {
+            NSRunningApplication::runningApplicationWithProcessIdentifier(self.pid)
+                .and_then(|a| a.localizedName())
+                .map(|name| name.to_string())
+                .unwrap_or_else(|| app.clone())
+        } else {
+            site.clone()
+        };
+        Place::new(app, site, id, label, &who)
+    }
+
     /// The field's text, empty while it only shows its placeholder. Web
     /// composers draw the placeholder as text: ChatGPT's empty box in Zen
     /// reads "Ask ChatGPT\n", with no AXPlaceholderValue, the same words in
@@ -772,15 +838,7 @@ impl surface::Field for Field {
         if shown.is_empty() {
             return Some(value);
         }
-        let labels = self.labels.get_or_init(|| {
-            ["AXPlaceholderValue", "AXDescription", "AXTitle"]
-                .into_iter()
-                .filter_map(|name| string_attribute(&self.element, name))
-                .map(|label| label.trim().to_string())
-                .filter(|label| !label.is_empty())
-                .collect()
-        });
-        let placeholder = labels.iter().any(|label| label == shown);
+        let placeholder = self.labels().iter().any(|label| label == shown);
         let text = if placeholder {
             String::new()
         } else if web(&self.element) {

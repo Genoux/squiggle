@@ -281,6 +281,14 @@ mod tests {
     }
 
     impl Field for Fake {
+        type Handle = ();
+
+        fn handle(&self) {}
+
+        fn place(&self) -> gramly_core::off::Place {
+            gramly_core::off::Place::default()
+        }
+
         fn value(&self) -> Option<String> {
             Some(self.text.borrow().clone())
         }

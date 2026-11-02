@@ -16,6 +16,8 @@ mod tests;
 use super::card::Action;
 use super::{Field, Focus, Host, Mark, Overlay, Rect, update_config};
 use gramly_core::diff::{Piece, pieces};
+use gramly_core::off::Place;
+use gramly_core::router::{self, Blocked};
 use gramly_core::worker::{Outcome, Worker};
 use gramly_core::{Config, Fix, Kind, config, merge, rebase, sentence};
 use std::collections::{HashMap, HashSet};
@@ -46,8 +48,17 @@ const MODEL_LATE: Duration = Duration::from_secs(4);
 const ACCEPTED_FOR: Duration = Duration::from_secs(60);
 /// How long an accepted word glows.
 pub const FLASH: Duration = Duration::from_millis(380);
-/// "Pause for an hour". Held in memory: a restart is a fresh start.
+/// The card's "Pause everywhere for an hour". Pauses are held in memory: a
+/// restart is a fresh start.
 const PAUSE_FOR: Duration = Duration::from_secs(60 * 60);
+/// The Pause submenu, as Slack and Dropbox offer it: a few lengths and the
+/// rest of the day. `None` is until tomorrow.
+pub const PAUSES: &[(Option<u64>, &str)] = &[
+    (Some(30 * 60), "For 30 minutes"),
+    (Some(60 * 60), "For 1 hour"),
+    (Some(3 * 60 * 60), "For 3 hours"),
+    (None, "Until tomorrow"),
+];
 /// The Spelling submenu, in the config's words and the menu's.
 pub const DIALECTS: &[(&str, &str)] = &[
     ("american", "American"),
@@ -64,12 +75,6 @@ const DISMISSALS: usize = 2000;
 /// pointer reads as a bug, whatever the reason - and indexes nothing.
 const ORPHAN: usize = usize::MAX;
 
-const THIS_MACHINE: &str = if cfg!(target_os = "macos") {
-    "this Mac"
-} else {
-    "this computer"
-};
-
 /// A dismissed suggestion: the few words before it on its line, what it
 /// would change, and to what. The words before keep a dismissal to that
 /// place - "ok" -> "OK" dismissed once is not dismissed everywhere - and,
@@ -81,45 +86,16 @@ type Dismissal = (String, String, String);
 /// one drawn.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Status {
-    pub line: String,
     pub trusted: bool,
     pub ai: bool,
-    /// Timed pause, or `enabled = false` in the config: either way the menu
-    /// offers Resume, since no toggle is left to turn it back on.
-    pub paused: bool,
-    pub front: Option<(String, String)>,
-    pub off_here: bool,
-    pub terminal: bool,
+    /// "Paused until 15:40", while paused.
+    pub paused: Option<String>,
+    /// The model refuses for a reason only the writer can end; see
+    /// `router::blocked`.
+    pub blocked: Option<Blocked>,
+    /// The names of the fields turned off from a card, saved ones first.
+    pub off: Vec<String>,
     pub dialect: String,
-}
-
-/// The per-app menu item: shown only while an app is in front.
-#[derive(Debug, PartialEq)]
-pub struct AppItem {
-    pub title: String,
-    pub enabled: bool,
-}
-
-impl Status {
-    pub fn pause_title(&self) -> &'static str {
-        if self.paused {
-            "Resume"
-        } else {
-            "Pause for an hour"
-        }
-    }
-
-    pub fn app_item(&self) -> Option<AppItem> {
-        let (_, name) = self.front.as_ref()?;
-        let (title, enabled) = if self.terminal {
-            (format!("Off in {name}: terminals are skipped"), false)
-        } else if self.off_here {
-            (format!("Turn on in {name}"), true)
-        } else {
-            (format!("Turn off in {name}"), true)
-        };
-        Some(AppItem { title, enabled })
-    }
 }
 
 pub struct Engine<H: Host, O: Overlay> {
@@ -182,11 +158,18 @@ pub struct Engine<H: Host, O: Overlay> {
     /// underlines stand in; once it has, its answer is the whole answer.
     ai_current: bool,
     trusted: bool,
-    /// "Pause for an hour" ends here; the clock time is written once, when
-    /// the pause starts, since the menu asks for the status every tick.
+    /// A pause ends here. What the menu says is written once, when the pause
+    /// starts, since the menu asks for the status every tick.
     paused_until: Option<(Instant, String)>,
-    /// The app in front (bundle id, name); see [`Host::front`].
-    front: Option<(String, String)>,
+    /// Fields with no suggestions, from a card's "Don't suggest in this
+    /// field": those that can be known again after a restart (saved), and
+    /// those that cannot, known by their element until Gramly quits.
+    off: Vec<Place>,
+    off_now: Vec<(<H::Field as Field>::Handle, String)>,
+    /// The focused field as `off` knows it, and whether it is one of them.
+    /// Worked out once, when it takes focus.
+    here: Option<Place>,
+    here_off: bool,
     /// The last snapshot written for `GRAMLY_STATE`.
     exported: Option<String>,
 }
@@ -194,6 +177,7 @@ pub struct Engine<H: Host, O: Overlay> {
 impl<H: Host, O: Overlay> Engine<H, O> {
     pub fn new(host: H, overlay: O) -> Self {
         let trusted = host.trusted();
+        let off = host.load_off();
         Self {
             config: host.config(),
             host,
@@ -228,7 +212,10 @@ impl<H: Host, O: Overlay> Engine<H, O> {
             ai_current: false,
             trusted,
             paused_until: None,
-            front: None,
+            off,
+            off_now: Vec::new(),
+            here: None,
+            here_off: false,
             exported: None,
         }
     }
@@ -244,38 +231,22 @@ impl<H: Host, O: Overlay> Engine<H, O> {
     }
 
     pub fn status(&self) -> Status {
-        let config = &self.config;
-        let off_here = self
-            .front
-            .as_ref()
-            .filter(|(id, _)| config.off_in.contains(id));
-        let line = if !self.trusted {
-            "Needs Accessibility access".to_string()
-        } else if !config.enabled {
-            "Paused".to_string()
-        } else if let Some((_, clock)) = &self.paused_until {
-            format!("Paused until {clock}")
-        } else if let Some((_, name)) = off_here {
-            format!("Off in {name}")
-        } else if !self.ai_on() {
-            format!("Checking on {THIS_MACHINE}")
-        } else if self.ai_error.is_some() {
-            format!("AI unavailable, checking on {THIS_MACHINE}")
-        } else {
-            "Gramly is on".to_string()
-        };
         Status {
-            line,
             trusted: self.trusted,
             ai: self.ai_on(),
-            paused: self.paused_until.is_some() || !config.enabled,
-            front: self.front.clone(),
-            off_here: off_here.is_some(),
-            terminal: self
-                .front
-                .as_ref()
-                .is_some_and(|(id, _)| self.host.terminal(id)),
-            dialect: config.dialect.clone(),
+            paused: self.paused_until.as_ref().map(|(_, line)| line.clone()),
+            blocked: self
+                .ai_error
+                .as_deref()
+                .and_then(router::blocked)
+                .filter(|_| self.ai_on()),
+            off: self
+                .off
+                .iter()
+                .map(|place| place.name.clone())
+                .chain(self.off_now.iter().map(|(_, name)| name.clone()))
+                .collect(),
+            dialect: self.config.dialect.clone(),
         }
     }
 
@@ -288,6 +259,9 @@ impl<H: Host, O: Overlay> Engine<H, O> {
             Action::Learn => self.learn_shown(tagged),
             Action::AcceptSentence => self.accept_group(tagged),
             Action::DismissSentence => self.dismiss_group(tagged),
+            Action::More => self.overlay.toggle_menu(),
+            Action::OffHere => self.off_here(),
+            Action::PauseHour => self.pause(PAUSE_FOR),
         }
     }
 
@@ -357,18 +331,68 @@ impl<H: Host, O: Overlay> Engine<H, O> {
         self.ai_error = None;
     }
 
-    /// Resume clears both kinds of pause, so a config with `enabled = false`
-    /// is not a state the menu cannot leave.
-    pub fn toggle_pause(&mut self) {
-        let resuming = self.paused_until.is_some() || !self.config.enabled;
-        if !self.config.enabled {
-            update_config(|c| c.enabled = true);
+    /// One of [`PAUSES`], by its place in the list.
+    pub fn pause_for(&mut self, index: usize) {
+        match PAUSES.get(index) {
+            Some((Some(seconds), _)) => self.pause(Duration::from_secs(*seconds)),
+            Some((None, _)) => {
+                let until = Instant::now() + until_tomorrow();
+                self.paused_until = Some((until, "Paused until tomorrow".into()));
+                self.reset();
+            }
+            None => {}
         }
-        self.paused_until = (!resuming).then(|| {
-            let until = Instant::now() + PAUSE_FOR;
-            (until, self.host.clock(until))
-        });
+    }
+
+    fn pause(&mut self, length: Duration) {
+        let until = Instant::now() + length;
+        self.paused_until = Some((until, format!("Paused until {}", self.host.clock(until))));
         self.reset();
+    }
+
+    pub fn resume(&mut self) {
+        self.paused_until = None;
+        self.reset();
+    }
+
+    /// The card's "Don't suggest in this field".
+    fn off_here(&mut self) {
+        let (Some(field), Some(place)) = (&self.field, self.here.clone()) else {
+            return;
+        };
+        note!("no suggestions in {}", place.name);
+        if place.lasting() {
+            self.off.push(place);
+            self.save_off();
+        } else {
+            self.off_now.push((field.handle(), place.name));
+        }
+        self.reset();
+    }
+
+    /// One field from "Off in N fields" back on, by its place in
+    /// `Status::off`: the saved ones first.
+    pub fn turn_on(&mut self, index: usize) {
+        if index < self.off.len() {
+            self.off.remove(index);
+            self.save_off();
+        } else if index - self.off.len() < self.off_now.len() {
+            self.off_now.remove(index - self.off.len());
+        }
+        self.reset();
+    }
+
+    pub fn turn_all_on(&mut self) {
+        self.off.clear();
+        self.off_now.clear();
+        self.save_off();
+        self.reset();
+    }
+
+    fn save_off(&self) {
+        if let Err(err) = self.host.save_off(&self.off) {
+            note!("saving the fields turned off: {err:#}");
+        }
     }
 
     pub fn toggle_ai(&mut self) {
@@ -385,22 +409,10 @@ impl<H: Host, O: Overlay> Engine<H, O> {
         self.reset();
     }
 
-    pub fn toggle_app(&mut self) {
-        let Some((id, _)) = self.front.clone() else {
-            return;
-        };
-        update_config(|c| {
-            if c.off_in.contains(&id) {
-                c.off_in.retain(|other| *other != id);
-            } else {
-                c.off_in.push(id.clone());
-            }
-        });
-        self.reset();
-    }
-
     pub fn reset(&mut self) {
         self.field = None;
+        self.here = None;
+        self.here_off = false;
         self.text.clear();
         self.placed.clear();
         self.local.clear();
@@ -447,15 +459,11 @@ impl<H: Host, O: Overlay> Engine<H, O> {
         }
     }
 
-    /// Reads the settings and the app in front; false when nothing should be
-    /// read or drawn, with everything hidden.
+    /// Reads the settings; false when nothing should be read or drawn, with
+    /// everything hidden.
     fn gate(&mut self) -> bool {
         self.config = self.host.config();
         self.trusted = self.host.trusted();
-        let front = self.host.front();
-        if front.is_some() && front != self.front {
-            self.front = front;
-        }
         if self
             .paused_until
             .as_ref()
@@ -463,11 +471,7 @@ impl<H: Host, O: Overlay> Engine<H, O> {
         {
             self.paused_until = None;
         }
-        let off_here = self
-            .front
-            .as_ref()
-            .is_some_and(|(id, _)| self.config.off_in.contains(id));
-        let open = self.config.enabled && self.trusted && self.paused_until.is_none() && !off_here;
+        let open = self.trusted && self.paused_until.is_none();
         if !open {
             self.reset();
         }
@@ -483,6 +487,11 @@ impl<H: Host, O: Overlay> Engine<H, O> {
             Focus::Same => self.misses = 0,
             Focus::Field(field) => {
                 self.reset();
+                let place = field.place();
+                let handle = field.handle();
+                self.here_off = self.off.iter().any(|off| off.matches(&place))
+                    || self.off_now.iter().any(|(off, _)| *off == handle);
+                self.here = Some(place);
                 self.field = Some(field);
                 self.misses = 0;
             }
@@ -500,7 +509,9 @@ impl<H: Host, O: Overlay> Engine<H, O> {
                 return false;
             }
         }
-        true
+        // Turned off from a card: the field is kept, so it is recognised
+        // without being asked again, and nothing is read or drawn.
+        !self.here_off
     }
 
     fn read_text(&mut self) -> bool {
@@ -740,6 +751,17 @@ impl<H: Host, O: Overlay> Engine<H, O> {
             merge(self.local.clone(), self.ai.clone())
         }
     }
+}
+
+/// From now to the start of tomorrow, local time; at least a minute.
+fn until_tomorrow() -> Duration {
+    let now = unsafe { libc::time(std::ptr::null_mut()) };
+    let mut local: libc::tm = unsafe { std::mem::zeroed() };
+    if unsafe { libc::localtime_r(&now, &mut local) }.is_null() {
+        return Duration::from_secs(24 * 60 * 60);
+    }
+    let into_day = local.tm_hour as u64 * 3600 + local.tm_min as u64 * 60 + local.tm_sec as u64;
+    Duration::from_secs((24 * 60 * 60_u64).saturating_sub(into_day).max(60))
 }
 
 /// What an underline is drawn under. A correction is drawn under all it
