@@ -229,12 +229,17 @@ fn model_loop(pass: Pass, rx: Receiver<Request>, out: Sender<Outcome>) {
         if pending.is_some() {
             continue;
         }
+        // A failure is the answer: followed by an empty answer, as it once
+        // was, the app took the model as having found nothing and never
+        // fell back to Harper - out of credits, nothing was underlined at
+        // all. What did come back stays cached for the next ask.
         if let Some(reason) = failure {
             let generation = request.generation;
             let _ = out.send(match pass {
                 Pass::Correct => Outcome::AiFailed { generation, reason },
                 Pass::Improve => Outcome::ImproveFailed { generation, reason },
             });
+            continue;
         }
 
         let mut fixes = Vec::new();

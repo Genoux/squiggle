@@ -103,7 +103,10 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
   card). Drawing Harper first and the model second made suggestions
   appear and then vanish, often while hovered (the log showed "card's fix
   withdrawn" each time). Harper draws when the model is off, failing, or
-  has not answered within `MODEL_LATE` (4s).
+  has not answered within `MODEL_LATE` (4s). A failed model check sends only
+  its failure: the worker once followed it with an empty answer, the app
+  took that as the model finding nothing, and with the key out of credits
+  not even Harper's underlines were drawn.
 - Harper and the model, when both are drawn: once the model has
   answered for the current text, its fixes are the whole answer. Harper on
   short French slang offered "Eat" for "ERT", and only runs on sentences
