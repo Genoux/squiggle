@@ -164,6 +164,40 @@ pub fn run(args: &[String]) -> Result<()> {
             save(&host, &dir.join(format!("{file}-{mode}.png")), mtm)?;
         }
 
+        // The ⋯'s menu, open over the spelling card as the app opens it.
+        {
+            let (_, text, fixes, hovered) = samples().remove(0);
+            let group: Vec<(usize, Fix)> = fixes.into_iter().enumerate().collect();
+            let content =
+                card::card(hovered, &group, text).ok_or_else(|| anyhow!("no card for the menu"))?;
+            let card = overlay::build(hovered, &content, &target, p, mtm);
+            let size = card.view.frame().size;
+            let shade = overlay::shade(size, p, mtm);
+            let host = backdrop(shade.frame().size, ground, mtm);
+            shade.setFrameOrigin(CGPoint::new(MARGIN, MARGIN));
+            host.addSubview(&shade);
+            let at = CGPoint::new(MARGIN + theme::SHADE.0, MARGIN + theme::SHADE.3);
+            card.view.setFrameOrigin(at);
+            host.addSubview(&card.view);
+            let menu = overlay::menu(&target, p, mtm);
+            let place = theme::menu_at(crate::surface::Rect {
+                x: 0.0,
+                y: 0.0,
+                w: size.width,
+                h: size.height,
+            });
+            let origin = CGPoint::new(at.x + place.x, at.y + size.height - place.y - place.h);
+            let menu_shade = overlay::shade(menu.view.frame().size, p, mtm);
+            menu_shade.setFrameOrigin(CGPoint::new(
+                origin.x - theme::SHADE.0,
+                origin.y - theme::SHADE.3,
+            ));
+            host.addSubview(&menu_shade);
+            menu.view.setFrameOrigin(origin);
+            host.addSubview(&menu.view);
+            save(&host, &dir.join(format!("menu-{mode}.png")), mtm)?;
+        }
+
         for (file, words) in [
             (
                 "dictionary",

@@ -104,7 +104,10 @@ fn parse_chat(reply: &serde_json::Value) -> Result<String> {
             .get("message")
             .and_then(|m| m.as_str())
             .unwrap_or("no reason given");
-        bail!("OpenRouter refused the text: {message}");
+        match error.get("code").and_then(|c| c.as_u64()) {
+            Some(code) => bail!("OpenRouter refused the text ({code}): {message}"),
+            None => bail!("OpenRouter refused the text: {message}"),
+        }
     }
     let Some(choice) = reply.get("choices").and_then(|c| c.get(0)) else {
         bail!("OpenRouter sent no choices");
@@ -123,6 +126,32 @@ fn parse_chat(reply: &serde_json::Value) -> Result<String> {
         bail!("the model returned nothing");
     }
     Ok(text.trim().to_string())
+}
+
+/// A failure only the writer can end, as the menu offers to: money on the
+/// account, or a key that works. Anything else - the network, a busy
+/// provider - passes on its own, and the menu says nothing about it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Blocked {
+    Credits,
+    Key,
+}
+
+/// What `reason`, a model check's failure, asks of the writer, if anything.
+/// OpenRouter answers 402 when the credits or the key's limit run out
+/// ("This request requires more credits, or fewer max_tokens") and 401
+/// for a key it does not know.
+pub fn blocked(reason: &str) -> Option<Blocked> {
+    if !reason.starts_with("OpenRouter refused the text") {
+        return None;
+    }
+    if reason.contains("(402)") || reason.to_lowercase().contains("credits") {
+        Some(Blocked::Credits)
+    } else if reason.contains("(401)") {
+        Some(Blocked::Key)
+    } else {
+        None
+    }
 }
 
 fn post(key: &str, path: &str, body: &str, timeout: Duration) -> Result<serde_json::Value> {
@@ -211,6 +240,24 @@ mod tests {
     fn a_key_with_a_quote_never_reaches_curl() {
         assert!(!valid_key("sk-or-\"; url = evil"));
         assert!(valid_key("sk-or-v1-abc123_DEF"));
+    }
+
+    #[test]
+    fn only_a_refusal_the_writer_can_end_is_blocked() {
+        let credits = serde_json::json!({"error": {"code": 402, "message":
+            "This request requires more credits, or fewer max_tokens. You requested up to 2048 tokens, but can only afford 989."}});
+        let reason = parse_chat(&credits).unwrap_err().to_string();
+        assert_eq!(blocked(&reason), Some(Blocked::Credits), "{reason}");
+        let key = serde_json::json!({"error": {"code": 401, "message": "User not found."}});
+        let reason = parse_chat(&key).unwrap_err().to_string();
+        assert_eq!(blocked(&reason), Some(Blocked::Key), "{reason}");
+        let busy =
+            serde_json::json!({"error": {"code": 502, "message": "Provider returned error"}});
+        assert_eq!(blocked(&parse_chat(&busy).unwrap_err().to_string()), None);
+        assert_eq!(
+            blocked("could not reach OpenRouter: curl: (28) Operation timed out"),
+            None
+        );
     }
 
     #[test]

@@ -6,7 +6,9 @@ use crate::macos::dictionary::Dictionary;
 use crate::macos::host::MacHost;
 use crate::macos::overlay::Overlay;
 use crate::surface::menu::{Command, Item, menu};
-use crate::surface::{Action, Engine, Status, TICK, parse_key, recent_log, update_config};
+use crate::surface::{
+    ADD_CREDITS, Action, Engine, Status, TICK, parse_key, recent_log, update_config,
+};
 use gramly_core::Config;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, NSObject, NSObjectProtocol};
@@ -89,6 +91,21 @@ define_class!(
             self.act(Action::DismissSentence, sender);
         }
 
+        #[unsafe(method(more:))]
+        fn more(&self, sender: &AnyObject) {
+            self.act(Action::More, sender);
+        }
+
+        #[unsafe(method(offHere:))]
+        fn off_here(&self, sender: &AnyObject) {
+            self.act(Action::OffHere, sender);
+        }
+
+        #[unsafe(method(pauseHour:))]
+        fn pause_hour(&self, sender: &AnyObject) {
+            self.act(Action::PauseHour, sender);
+        }
+
         #[unsafe(method(choose:))]
         fn choose(&self, sender: &AnyObject) {
             let index = tag(sender);
@@ -161,8 +178,15 @@ impl Controller {
 
     fn run(&self, command: Command) {
         match command {
-            Command::Pause => self.update(Engine::toggle_pause),
-            Command::ToggleApp => self.update(Engine::toggle_app),
+            Command::PauseFor(index) => self.update(|engine| engine.pause_for(index)),
+            Command::Resume => self.update(Engine::resume),
+            Command::TurnOn(index) => self.update(|engine| engine.turn_on(index)),
+            Command::TurnAllOn => self.update(Engine::turn_all_on),
+            Command::AddCredits => {
+                if let Some(url) = NSURL::URLWithString(&NSString::from_str(ADD_CREDITS)) {
+                    NSWorkspace::sharedWorkspace().openURL(&url);
+                }
+            }
             Command::ToggleAi => self.update(Engine::toggle_ai),
             Command::SetKey => {
                 ask_for_key(self.mtm());

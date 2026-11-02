@@ -1,13 +1,25 @@
 //! The status menu, decided once. Each platform draws these items and sends
 //! the [`Command`] of whichever is clicked back to the run loop; neither
 //! decides what is listed, in what order, or when it is enabled.
+//!
+//! No status line and no on/off switch: running is on, quitting is off, and
+//! why a model call failed is in the log. Ordered as most menu bar apps are:
+//! the name, what Gramly is doing, settings, then the log and Quit.
 
-use super::{DIALECTS, Status};
+use super::{DIALECTS, PAUSES, Status};
+use gramly_core::router::Blocked;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Command {
-    Pause,
-    ToggleApp,
+    /// One of [`PAUSES`], by its place in the list.
+    PauseFor(usize),
+    Resume,
+    /// Opens OpenRouter's credits page.
+    AddCredits,
+    /// A field turned off from a card, back on, by its place in
+    /// `Status::off`.
+    TurnOn(usize),
+    TurnAllOn,
     ToggleAi,
     SetKey,
     Spelling(usize),
@@ -47,13 +59,59 @@ fn action(label: impl Into<String>, command: Command) -> Item {
 }
 
 pub fn menu(status: &Status) -> Vec<Item> {
-    let grant =
-        (!status.trusted).then(|| action("Grant Accessibility access…", Command::GrantAccess));
-    let app = status.app_item().map(|app| Item::Action {
-        label: app.title,
-        enabled: app.enabled,
-        command: Command::ToggleApp,
-    });
+    let mut items = vec![
+        Item::Note(concat!("Gramly ", env!("CARGO_PKG_VERSION")).into()),
+        Item::Separator,
+    ];
+    if !status.trusted {
+        items.push(action("Grant Accessibility access…", Command::GrantAccess));
+    }
+    // The one status shown: the writer has to act, and the log was the only
+    // place that said so.
+    match status.blocked {
+        Some(Blocked::Credits) => items.push(action(
+            "AI suggestions stopped: add OpenRouter credits…",
+            Command::AddCredits,
+        )),
+        Some(Blocked::Key) => items.push(action(
+            "AI suggestions stopped: check your OpenRouter key…",
+            Command::SetKey,
+        )),
+        None => {}
+    }
+    match &status.paused {
+        Some(line) => {
+            items.push(Item::Note(line.clone()));
+            items.push(action("Resume", Command::Resume));
+        }
+        None => items.push(Item::Submenu {
+            label: "Pause".into(),
+            items: PAUSES
+                .iter()
+                .enumerate()
+                .map(|(index, (_, name))| action(*name, Command::PauseFor(index)))
+                .collect(),
+        }),
+    }
+    if !status.off.is_empty() {
+        let mut list = vec![Item::Note("Click one to suggest there again".into())];
+        list.extend(
+            status
+                .off
+                .iter()
+                .enumerate()
+                .map(|(index, name)| action(name.as_str(), Command::TurnOn(index))),
+        );
+        list.push(Item::Separator);
+        list.push(action("Turn all back on", Command::TurnAllOn));
+        items.push(Item::Submenu {
+            label: match status.off.len() {
+                1 => "Off in 1 field".into(),
+                count => format!("Off in {count} fields"),
+            },
+            items: list,
+        });
+    }
     let spelling = DIALECTS
         .iter()
         .enumerate()
@@ -63,34 +121,24 @@ pub fn menu(status: &Status) -> Vec<Item> {
             command: Command::Spelling(index),
         })
         .collect();
-    [
-        Some(Item::Note(status.line.clone())),
-        grant,
-        Some(Item::Separator),
-        Some(action(status.pause_title(), Command::Pause)),
-        app,
-        Some(Item::Separator),
-        Some(Item::Check {
+    items.extend([
+        Item::Separator,
+        Item::Check {
             label: "AI suggestions".into(),
             on: status.ai,
             command: Command::ToggleAi,
-        }),
-        Some(action("OpenRouter key…", Command::SetKey)),
-        Some(Item::Submenu {
+        },
+        Item::Submenu {
             label: "Spelling".into(),
             items: spelling,
-        }),
-        Some(action("Personal dictionary…", Command::Dictionary)),
-        Some(Item::Separator),
-        Some(action("Copy recent log", Command::CopyLog)),
-        Some(action(
-            concat!("Quit Gramly ", env!("CARGO_PKG_VERSION")),
-            Command::Quit,
-        )),
-    ]
-    .into_iter()
-    .flatten()
-    .collect()
+        },
+        action("Personal dictionary…", Command::Dictionary),
+        action("OpenRouter key…", Command::SetKey),
+        Item::Separator,
+        action("Copy recent log", Command::CopyLog),
+        action("Quit Gramly", Command::Quit),
+    ]);
+    items
 }
 
 #[cfg(test)]
@@ -99,13 +147,11 @@ mod tests {
 
     fn status() -> Status {
         Status {
-            line: "Gramly is on".into(),
             trusted: true,
             ai: true,
-            paused: false,
-            front: Some(("com.slack.Slack".into(), "Slack".into())),
-            off_here: false,
-            terminal: false,
+            paused: None,
+            blocked: None,
+            off: Vec::new(),
             dialect: "british".into(),
         }
     }
@@ -129,7 +175,19 @@ mod tests {
         menu(&status)
     }
 
-    const QUIT: &str = concat!("Quit Gramly ", env!("CARGO_PKG_VERSION"));
+    fn submenu<'a>(items: &'a [Item], wanted: &str) -> &'a [Item] {
+        items
+            .iter()
+            .find_map(|item| match item {
+                Item::Submenu { label, items } if label.starts_with(wanted) => {
+                    Some(items.as_slice())
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("no {wanted} submenu"))
+    }
+
+    const NAME: &str = concat!("Gramly ", env!("CARGO_PKG_VERSION"));
 
     #[test]
     fn the_menu_is_in_order() {
@@ -137,15 +195,14 @@ mod tests {
         assert_eq!(
             labels(&items),
             [
-                "Gramly is on",
-                "Pause for an hour",
-                "Turn off in Slack",
+                NAME,
+                "Pause",
                 "AI suggestions",
-                "OpenRouter key…",
                 "Spelling",
                 "Personal dictionary…",
+                "OpenRouter key…",
                 "Copy recent log",
-                QUIT,
+                "Quit Gramly",
             ]
         );
         let separators: Vec<usize> = items
@@ -154,19 +211,34 @@ mod tests {
             .filter(|(_, item)| **item == Item::Separator)
             .map(|(index, _)| index)
             .collect();
-        assert_eq!(separators, [1, 4, 9]);
+        assert_eq!(separators, [1, 3, 8]);
+    }
+
+    #[test]
+    fn pause_offers_each_length() {
+        let items = menu(&status());
+        let lengths = submenu(&items, "Pause");
+        assert_eq!(labels(lengths).len(), PAUSES.len());
+        assert_eq!(
+            lengths.last(),
+            Some(&action(
+                "Until tomorrow",
+                Command::PauseFor(PAUSES.len() - 1)
+            ))
+        );
+    }
+
+    #[test]
+    fn paused_says_until_when_and_offers_resume() {
+        let items = with(|s| s.paused = Some("Paused until 15:40".into()));
+        assert_eq!(labels(&items)[1..3], ["Paused until 15:40", "Resume"]);
+        assert!(!labels(&items).contains(&"Pause"));
     }
 
     #[test]
     fn spelling_checks_the_current_dialect() {
         let items = menu(&status());
-        let Some(Item::Submenu { items, .. }) = items
-            .iter()
-            .find(|item| matches!(item, Item::Submenu { .. }))
-        else {
-            panic!("no spelling submenu");
-        };
-        let on: Vec<Command> = items
+        let on: Vec<Command> = submenu(&items, "Spelling")
             .iter()
             .filter_map(|item| match item {
                 Item::Check {
@@ -176,36 +248,44 @@ mod tests {
             })
             .collect();
         assert_eq!(on, [Command::Spelling(1)]);
-        assert_eq!(items.len(), DIALECTS.len());
     }
 
     #[test]
-    fn paused_offers_resume() {
-        let items = with(|s| s.paused = true);
-        assert_eq!(labels(&items)[1], "Resume");
+    fn out_of_credits_leads_to_credits_and_a_bad_key_to_the_key() {
+        let items = with(|s| s.blocked = Some(Blocked::Credits));
+        assert_eq!(
+            items[2],
+            action(
+                "AI suggestions stopped: add OpenRouter credits…",
+                Command::AddCredits
+            )
+        );
+        let items = with(|s| s.blocked = Some(Blocked::Key));
+        assert_eq!(
+            items[2],
+            action(
+                "AI suggestions stopped: check your OpenRouter key…",
+                Command::SetKey
+            )
+        );
     }
 
     #[test]
-    fn off_here_offers_turning_on() {
-        let items = with(|s| s.off_here = true);
-        assert_eq!(labels(&items)[2], "Turn on in Slack");
-    }
-
-    #[test]
-    fn a_terminal_is_disabled_with_its_reason() {
-        let items = with(|s| s.terminal = true);
-        assert!(items.contains(&Item::Action {
-            label: "Off in Slack: terminals are skipped".into(),
-            enabled: false,
-            command: Command::ToggleApp,
-        }));
-    }
-
-    #[test]
-    fn no_app_in_front_drops_the_app_item() {
-        let items = with(|s| s.front = None);
-        assert!(!labels(&items).iter().any(|label| label.contains("Slack")));
-        assert_eq!(labels(&items).len(), 8);
+    fn fields_turned_off_are_listed_to_turn_back_on() {
+        assert!(
+            !labels(&menu(&status()))
+                .iter()
+                .any(|l| l.starts_with("Off in"))
+        );
+        let items = with(|s| s.off = vec!["Slack · Message #design".into()]);
+        let list = submenu(&items, "Off in 1 field");
+        assert!(list.contains(&action("Slack · Message #design", Command::TurnOn(0))));
+        assert_eq!(
+            list.last(),
+            Some(&action("Turn all back on", Command::TurnAllOn))
+        );
+        let items = with(|s| s.off = vec!["a".into(), "b".into()]);
+        submenu(&items, "Off in 2 fields");
     }
 
     #[test]
@@ -219,16 +299,7 @@ mod tests {
     }
 
     #[test]
-    fn the_status_line_is_shown_as_given() {
-        let items = with(|s| s.line = "AI unavailable, checking on this computer".into());
-        assert_eq!(
-            items[0],
-            Item::Note("AI unavailable, checking on this computer".into())
-        );
-    }
-
-    #[test]
-    fn untrusted_offers_access_after_the_status() {
+    fn untrusted_offers_access_first() {
         let items = with(|s| s.trusted = false);
         assert_eq!(labels(&items)[1], "Grant Accessibility access…");
     }

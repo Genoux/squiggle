@@ -11,7 +11,16 @@ pub enum Action {
     Learn,
     AcceptSentence,
     DismissSentence,
+    /// The ⋯ at the title's end: opens [`MENU`].
+    More,
+    OffHere,
+    PauseHour,
 }
+
+/// The ⋯'s menu, top to bottom. Drawn in the card's look rather than as a
+/// system menu, so it is the same on every platform, and inside the card's
+/// corridor, so reaching for it never closes the card.
+pub const MENU: [Action; 2] = [Action::OffHere, Action::PauseHour];
 
 impl Action {
     pub fn label(self) -> &'static str {
@@ -20,6 +29,9 @@ impl Action {
             Action::Dismiss | Action::DismissSentence => "Dismiss",
             Action::Learn => "Add to dictionary",
             Action::AcceptSentence => "Correct the sentence",
+            Action::More => "More",
+            Action::OffHere => "Don't suggest in this field",
+            Action::PauseHour => "Pause everywhere for an hour",
         }
     }
 
@@ -31,6 +43,9 @@ impl Action {
             Action::Learn => "learn:",
             Action::AcceptSentence => "acceptSentence:",
             Action::DismissSentence => "dismissSentence:",
+            Action::More => "more:",
+            Action::OffHere => "offHere:",
+            Action::PauseHour => "pauseHour:",
         }
     }
 }

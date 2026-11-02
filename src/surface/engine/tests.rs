@@ -16,6 +16,8 @@ const FIELD: Rect = Rect {
 #[derive(Clone)]
 struct FakeField {
     text: Rc<RefCell<String>>,
+    /// Its label: empty, and it cannot be known again after a restart.
+    label: &'static str,
 }
 
 impl PartialEq for FakeField {
@@ -25,6 +27,22 @@ impl PartialEq for FakeField {
 }
 
 impl Field for FakeField {
+    type Handle = usize;
+
+    fn handle(&self) -> usize {
+        Rc::as_ptr(&self.text) as usize
+    }
+
+    fn place(&self) -> Place {
+        Place::new(
+            "app.id".into(),
+            String::new(),
+            String::new(),
+            self.label.into(),
+            "App",
+        )
+    }
+
     fn value(&self) -> Option<String> {
         Some(self.text.borrow().clone())
     }
@@ -86,6 +104,8 @@ struct FakeHost {
     elsewhere: Rc<Cell<bool>>,
     undos: Rc<Cell<u32>>,
     clocks: Rc<Cell<u32>>,
+    /// `off.txt`, in memory.
+    saved_off: Rc<RefCell<Vec<Place>>>,
 }
 
 impl Host for FakeHost {
@@ -103,8 +123,13 @@ impl Host for FakeHost {
         Some(("app.id".into(), "App".into()))
     }
 
-    fn terminal(&self, id: &str) -> bool {
-        id == "term.id"
+    fn load_off(&self) -> Vec<Place> {
+        self.saved_off.borrow().clone()
+    }
+
+    fn save_off(&self, places: &[Place]) -> anyhow::Result<()> {
+        *self.saved_off.borrow_mut() = places.to_vec();
+        Ok(())
     }
 
     fn focus(&mut self, current: Option<&FakeField>) -> Focus<FakeField> {
@@ -140,6 +165,7 @@ struct Drawn {
     card: Option<(usize, Card, Rect)>,
     hidden_marks: u32,
     cards_shown: u32,
+    menu_toggles: u32,
 }
 
 struct FakeOverlay(Rc<RefCell<Drawn>>);
@@ -177,6 +203,14 @@ impl Overlay for FakeOverlay {
     }
 
     fn hover(&mut self, _pointer: Point) {}
+
+    fn toggle_menu(&mut self) {
+        self.0.borrow_mut().menu_toggles += 1;
+    }
+
+    fn menu_frame(&self) -> Option<Rect> {
+        None
+    }
 }
 
 struct Rig {
@@ -188,9 +222,14 @@ struct Rig {
     elsewhere: Rc<Cell<bool>>,
     undos: Rc<Cell<u32>>,
     clocks: Rc<Cell<u32>>,
+    saved_off: Rc<RefCell<Vec<Place>>>,
 }
 
 fn rig(config: Config, trusted: bool) -> Rig {
+    rig_labelled(config, trusted, "Message")
+}
+
+fn rig_labelled(config: Config, trusted: bool, label: &'static str) -> Rig {
     let text = Rc::new(RefCell::new(TEXT.to_string()));
     let pointer = Rc::new(Cell::new(Point { x: 900.0, y: 900.0 }));
     let drawn = Rc::new(RefCell::new(Drawn::default()));
@@ -198,8 +237,12 @@ fn rig(config: Config, trusted: bool) -> Rig {
     let elsewhere = Rc::new(Cell::new(false));
     let undos = Rc::new(Cell::new(0));
     let clocks = Rc::new(Cell::new(0));
+    let saved_off = Rc::new(RefCell::new(Vec::new()));
     let host = FakeHost {
-        field: FakeField { text: text.clone() },
+        field: FakeField {
+            text: text.clone(),
+            label,
+        },
         config,
         trusted,
         pointer: pointer.clone(),
@@ -207,6 +250,7 @@ fn rig(config: Config, trusted: bool) -> Rig {
         elsewhere: elsewhere.clone(),
         undos: undos.clone(),
         clocks: clocks.clone(),
+        saved_off: saved_off.clone(),
     };
     let mut engine = Engine::new(host, FakeOverlay(drawn.clone()));
     engine.tick();
@@ -229,6 +273,7 @@ fn rig(config: Config, trusted: bool) -> Rig {
         elsewhere,
         undos,
         clocks,
+        saved_off,
     }
 }
 
@@ -345,120 +390,104 @@ fn dismissing_hides_the_fix_for_good() {
 }
 
 #[test]
-fn the_status_line_follows_the_state() {
+fn only_a_refusal_the_writer_can_end_shows_while_ai_is_on() {
     let mut rig = rig(local_only(), true);
-    assert_eq!(
-        rig.engine.status().line,
-        format!("Checking on {THIS_MACHINE}")
-    );
-
-    let keyed = Config {
+    let credits = "OpenRouter refused the text (402): This request requires more credits";
+    rig.engine.ai_error = Some(credits.into());
+    assert_eq!(rig.engine.status().blocked, None, "AI is off");
+    rig.engine.config = Config {
         openrouter_key: Some("key".into()),
         ..Config::default()
     };
-    rig.engine.config = keyed.clone();
-    assert_eq!(rig.engine.status().line, "Gramly is on");
-    rig.engine.ai_error = Some("timeout".into());
+    assert_eq!(rig.engine.status().blocked, Some(Blocked::Credits));
+    rig.engine.ai_error = Some("could not reach OpenRouter: timed out".into());
+    assert_eq!(rig.engine.status().blocked, None);
+}
+
+#[test]
+fn a_pause_says_until_when_and_resume_ends_it() {
+    let mut rig = rig(local_only(), true);
+    assert_eq!(rig.engine.status().paused, None);
+    rig.engine.pause_for(0);
     assert_eq!(
-        rig.engine.status().line,
-        format!("AI unavailable, checking on {THIS_MACHINE}")
+        rig.engine.status().paused.as_deref(),
+        Some("Paused until 3:00 PM")
     );
+    rig.engine.tick();
+    assert!(rig.engine.field.is_none(), "nothing is read while paused");
+    rig.engine.resume();
+    assert_eq!(rig.engine.status().paused, None);
+    rig.engine.tick();
+    assert!(rig.engine.field.is_some());
+}
 
-    rig.engine.config = Config {
-        off_in: vec!["app.id".into()],
-        ..keyed.clone()
-    };
-    let status = rig.engine.status();
-    assert_eq!(status.line, "Off in App");
-    assert!(status.off_here);
-
-    rig.engine.config = Config {
-        enabled: false,
-        ..keyed.clone()
-    };
-    assert_eq!(rig.engine.status().line, "Paused");
-    assert!(rig.engine.status().paused);
-
-    rig.engine.config = keyed;
-    rig.engine.toggle_pause();
-    assert_eq!(rig.engine.status().line, "Paused until 3:00 PM");
-    assert!(rig.engine.status().paused);
+#[test]
+fn until_tomorrow_names_no_clock_time() {
+    let mut rig = rig(local_only(), true);
+    rig.engine.pause_for(PAUSES.len() - 1);
+    assert_eq!(
+        rig.engine.status().paused.as_deref(),
+        Some("Paused until tomorrow")
+    );
+    assert_eq!(rig.clocks.get(), 0);
 }
 
 #[test]
 fn the_pause_clock_is_written_once_however_often_the_status_is_read() {
     let mut rig = rig(local_only(), true);
-    rig.engine.toggle_pause();
+    rig.engine.act(Action::PauseHour, 0);
     for _ in 0..5 {
         rig.engine.status();
     }
     assert_eq!(rig.clocks.get(), 1);
+    assert!(rig.engine.status().paused.is_some());
 }
 
 #[test]
-fn without_trust_the_status_asks_for_access() {
-    let rig = rig(local_only(), false);
-    let status = rig.engine.status();
-    assert_eq!(status.line, "Needs Accessibility access");
-    assert!(!status.trusted);
+fn a_field_turned_off_from_the_card_is_saved_and_shows_nothing() {
+    let mut rig = rig(local_only(), true);
+    rig.engine.act(Action::OffHere, 0);
+    assert_eq!(rig.saved_off.borrow().len(), 1);
+    assert_eq!(rig.engine.status().off, ["App · Message"]);
+    let drawn = rig.drawn.borrow().marks.len();
+    for _ in 0..3 {
+        rig.engine.tick();
+    }
+    assert!(rig.engine.field.is_some(), "kept, so it is not asked again");
+    assert!(rig.engine.text.is_empty(), "and not read");
+    assert_eq!(rig.drawn.borrow().marks.len(), drawn, "nor drawn");
+
+    rig.engine.turn_on(0);
+    assert!(rig.saved_off.borrow().is_empty());
+    assert!(rig.engine.status().off.is_empty());
+    rig.engine.tick();
+    assert_eq!(*rig.engine.text, *TEXT);
+}
+
+#[test]
+fn a_field_with_nothing_to_know_it_by_is_off_until_gramly_quits() {
+    let mut rig = rig_labelled(local_only(), true, "");
+    rig.engine.act(Action::OffHere, 0);
+    assert!(rig.saved_off.borrow().is_empty(), "not saved");
+    assert_eq!(rig.engine.status().off, ["App · Text field"]);
+    rig.engine.tick();
+    assert!(rig.engine.text.is_empty());
+    rig.engine.turn_all_on();
+    rig.engine.tick();
+    assert_eq!(*rig.engine.text, *TEXT);
+}
+
+#[test]
+fn the_more_button_opens_the_menu() {
+    let mut rig = rig(local_only(), true);
+    rig.engine.act(Action::More, 0);
+    assert_eq!(rig.drawn.borrow().menu_toggles, 1);
 }
 
 #[test]
 fn an_unchanged_status_compares_equal_so_the_menu_is_not_redrawn() {
     let rig = rig(local_only(), true);
     assert_eq!(rig.engine.status(), rig.engine.status());
-}
-
-fn status_with(change: impl FnOnce(&mut Status)) -> Status {
-    let mut status = Status {
-        line: String::new(),
-        trusted: true,
-        ai: false,
-        paused: false,
-        front: Some(("app.id".into(), "App".into())),
-        off_here: false,
-        terminal: false,
-        dialect: "american".into(),
-    };
-    change(&mut status);
-    status
-}
-
-#[test]
-fn the_pause_item_offers_what_clicking_it_does() {
-    assert_eq!(status_with(|_| {}).pause_title(), "Pause for an hour");
-    assert_eq!(status_with(|s| s.paused = true).pause_title(), "Resume");
-}
-
-#[test]
-fn the_app_item_names_the_app_in_front() {
-    let item = status_with(|_| {}).app_item().unwrap();
-    assert_eq!(
-        (item.title.as_str(), item.enabled),
-        ("Turn off in App", true)
-    );
-
-    let item = status_with(|s| s.off_here = true).app_item().unwrap();
-    assert_eq!(
-        (item.title.as_str(), item.enabled),
-        ("Turn on in App", true)
-    );
-}
-
-#[test]
-fn the_app_item_is_disabled_for_a_terminal_and_absent_without_an_app() {
-    let item = status_with(|s| s.terminal = true).app_item().unwrap();
-    assert_eq!(item.title, "Off in App: terminals are skipped");
-    assert!(!item.enabled);
-
-    assert!(status_with(|s| s.front = None).app_item().is_none());
-}
-
-#[test]
-fn a_terminal_in_front_is_flagged() {
-    let mut rig = rig(local_only(), true);
-    rig.engine.front = Some(("term.id".into(), "Term".into()));
-    assert!(rig.engine.status().terminal);
 }
 
 #[test]

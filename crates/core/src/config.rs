@@ -10,27 +10,20 @@ use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Config {
-    /// Master switch. Off draws nothing and sends nothing.
-    pub enabled: bool,
     /// Whether text leaves the machine for the model's pass. Off keeps the
     /// local pass, which needs no key.
     pub ai: bool,
     /// Never log this value.
     pub openrouter_key: Option<String>,
     pub dialect: String,
-    /// Bundle ids of the apps turned off from the menu: nothing is read,
-    /// drawn or sent while one of them is in front.
-    pub off_in: Vec<String>,
 }
 
 impl Default for Config {
     fn default() -> Self {
         Self {
-            enabled: true,
             ai: true,
             openrouter_key: None,
             dialect: "american".into(),
-            off_in: Vec::new(),
         }
     }
 }
@@ -75,7 +68,6 @@ impl Config {
             };
             let value = value.trim().trim_matches('"').to_string();
             match key.trim() {
-                "enabled" => config.enabled = boolean(&at, &value)?,
                 "ai" => config.ai = boolean(&at, &value)?,
                 "openrouter_key" => config.openrouter_key = Some(value).filter(|v| !v.is_empty()),
                 "dialect" => match value.as_str() {
@@ -84,14 +76,11 @@ impl Config {
                     }
                     other => bail!("{at}: unknown dialect {other:?}"),
                 },
-                "off_in" => {
-                    config.off_in = value
-                        .split(',')
-                        .map(str::trim)
-                        .filter(|id| !id.is_empty())
-                        .map(String::from)
-                        .collect()
-                }
+                // Settings since removed: "Check as I type" and apps turned
+                // off from the menu. Read and let go, so the file still
+                // loads and an old `enabled = false` cannot leave Gramly
+                // off with no switch to turn it on; the next save drops them.
+                "enabled" | "off_in" => {}
                 // Named, not echoed: the line may be a key pasted in the wrong place.
                 other => bail!("{at}: unknown setting {other:?}"),
             }
@@ -119,13 +108,7 @@ impl Config {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let mut text = format!(
-            "enabled = {}\nai = {}\ndialect = \"{}\"\n",
-            self.enabled, self.ai, self.dialect
-        );
-        if !self.off_in.is_empty() {
-            text.push_str(&format!("off_in = \"{}\"\n", self.off_in.join(", ")));
-        }
+        let mut text = format!("ai = {}\ndialect = \"{}\"\n", self.ai, self.dialect);
         if let Some(key) = &self.openrouter_key {
             text.push_str(&format!("openrouter_key = \"{key}\"\n"));
         }
@@ -331,11 +314,9 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         let path = scratch("roundtrip");
         let config = Config {
-            enabled: true,
             ai: false,
             openrouter_key: Some("sk-or-v1-abc".into()),
             dialect: "british".into(),
-            off_in: vec!["com.tinyspeck.slackmacgap".into(), "com.apple.mail".into()],
         };
         config.save_to(&path).unwrap();
         assert_eq!(Config::load_from(&path).unwrap(), config);
@@ -349,5 +330,20 @@ mod tests {
         std::fs::write(&path, "ai = true\nsk-or-v1-pasted-here\n").unwrap();
         let err = Config::load_from(&path).unwrap_err().to_string();
         assert!(err.contains(":2:"), "{err}");
+    }
+
+    #[test]
+    fn a_removed_setting_still_loads_and_is_dropped_on_save() {
+        let path = scratch("removed");
+        let old = "enabled = false\nai = false\noff_in = \"com.apple.mail\"\n";
+        std::fs::write(&path, old).unwrap();
+        let config = Config::load_from(&path).unwrap();
+        assert!(!config.ai);
+        config.save_to(&path).unwrap();
+        let saved = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            !saved.contains("off_in") && !saved.contains("enabled"),
+            "{saved}"
+        );
     }
 }

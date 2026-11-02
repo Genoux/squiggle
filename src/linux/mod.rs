@@ -96,8 +96,18 @@ fn apply(
     main_loop: &glib::MainLoop,
 ) {
     match command {
-        Command::Pause => engine.toggle_pause(),
-        Command::ToggleApp => engine.toggle_app(),
+        Command::PauseFor(index) => engine.pause_for(index),
+        Command::Resume => engine.resume(),
+        Command::TurnOn(index) => engine.turn_on(index),
+        Command::TurnAllOn => engine.turn_all_on(),
+        Command::AddCredits => {
+            if let Err(err) = gtk::gio::AppInfo::launch_default_for_uri(
+                surface::ADD_CREDITS,
+                None::<&gtk::gio::AppLaunchContext>,
+            ) {
+                note!("opening {}: {err}", surface::ADD_CREDITS);
+            }
+        }
         Command::ToggleAi => engine.toggle_ai(),
         Command::SetKey => {
             let shared = shared.clone();

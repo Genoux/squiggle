@@ -215,9 +215,6 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
   since the ring is the system accent. `dictionary.txt` stays the store,
   so a word added from a card or typed into the file shows on the next
   open.
-- "Turn off in <app>" stores bundle ids in `off_in`, checked against the
-  app in front each tick; "Pause for an hour" lives in memory only, so a
-  restart is a fresh start. Both show in the menu's status line.
 - The menu is decided once, in `surface/menu.rs`: `menu(&Status)` returns
   the items, their order, labels and enabled states, and each platform only
   draws them and sends the clicked `Command` back. The two menus had drifted
@@ -225,12 +222,40 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
   its own) because each listed its own items. macOS rebuilds the NSMenu when
   `Status` changes and tags each item with an index into the commands drawn,
   one selector for all.
-- There is no "Check as I type": Pause and Quit cover it. `enabled = false`
-  in the config shows as paused and Resume clears it with the timed pause,
-  or a user with that line would have no way back from the menu. The status
-  line never names the model or provider; a failing model reads "AI
-  unavailable, checking on this computer" and the reason stays in the log.
-  The version is folded into Quit.
+- The menu has no status line and no on/off switch. The line named the
+  model, then said "on this Mac only" or "AI unavailable", then just
+  "Checking as you type", which told nothing: running is on, quitting is
+  off. Why a model call failed is in the log. It is ordered as most menu
+  bar apps are: name and version, what Gramly is doing, settings, then
+  the log and Quit. Pausing is a "Pause ▸" submenu (30 minutes, 1 hour,
+  3 hours, until tomorrow), as Slack and Dropbox offer it: a lone "Pause
+  for an hour" read oddly. Paused, the menu says "Paused until 15:40" and
+  offers Resume in its place. Without Accessibility, "Grant Accessibility
+  access…" comes first after the name. A pause lives in memory only, so
+  a restart is a fresh start; an `enabled` line in an old config is
+  ignored, so it cannot leave Gramly off with no switch.
+- One status does show: "AI suggestions stopped: add OpenRouter credits…"
+  (or "check your OpenRouter key…"), under the name, while the model
+  refuses for a reason only the writer can end (`router::blocked`: a 402
+  or a 401). The key ran out of credits and the log was the only place
+  that said so; underlines just stopped. The network or a busy provider
+  passes on its own and shows nothing.
+- Gramly is turned off per field, from the card, as in Grammarly: the ⋯
+  at the title's end opens "Don't suggest in this field" and the hour's
+  pause. A per-app "Turn off in <app>" in the menu came first and was
+  taken out; an `off_in` line in an old config is read and ignored. A
+  field is known (`off::Place`) by its app, the page's host for a web
+  field, its id and its first label; the id or the label is enough,
+  since a page may make up ids per load. Those are saved to `off.txt`; a
+  field with neither is kept off by its element until Gramly quits. The
+  menu's "Off in N fields" lists them to turn back on, and is hidden
+  when there are none. The ⋯'s menu is drawn in the card's look, not a
+  system menu, from the same items (`card::MENU`), icons
+  (`theme::icon`) and place (`theme::menu_at`) on both platforms, and is
+  inside the hover corridor. macOS draws it in panels of its own over the
+  card; Linux lays it over the card's words in the card's own surface,
+  which needs no second layer surface and already takes the pointer: the
+  shortest card is taller than the menu reaches.
 - Config and dictionary are read per check, as Flow reads its style per
   dictation, so a setting applies on the next pause rather than the next launch.
 - The key never reaches curl's argv; same `-K -` and 0600 body file as Flow.
@@ -448,8 +473,7 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
   `gio::AppInfo::all` by id (`{class}.desktop`, any case): gio 0.22 moved
   `DesktopAppInfo` into a crate this tree does not have. A class with no
   entry reads as its last dot segment capitalised ("com.slack.Slack" ->
-  "Slack"). The id stays the class, which is what `off_in` holds; the name
-  is cached per class because `front` runs every tick.
+  "Slack"). The id stays the class; the name is cached per class.
 - The systemd user unit sets no environment. It needs `WAYLAND_DISPLAY` and
   `HYPRLAND_INSTANCE_SIGNATURE` in the user manager, which uwsm provides;
   the installer checks `show-environment` and imports them if missing.

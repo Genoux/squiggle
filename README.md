@@ -83,8 +83,8 @@ dictionary…** opens `dictionary.txt` in your text editor.
 |---|---|
 | Red underline | A mistake - spelling, grammar, a wrong word |
 | Blue underline | Correct, but could read better |
-| Hover an underline | Your sentence with the fix in place, then **Accept** / **Dismiss** / **Add to dictionary** |
-| Menu bar icon (tray icon on Linux) | Pause for an hour, turn off in the app in front, AI on/off, key, spelling, personal dictionary |
+| Hover an underline | Your sentence with the fix in place, then **Accept** / **Dismiss** / **Add to dictionary**; **⋯** → **Don't suggest in this field** |
+| Menu bar icon (tray icon on Linux) | Pause (30 minutes to the rest of the day), the fields turned off (to turn back on), AI on/off, spelling, personal dictionary, key |
 | `gramly doctor` | What Gramly can see in the field you click into |
 | `gramly check < file.txt` | The same suggestions, printed |
 | `gramly check --improve < file.txt` | The clearer wording the app proposes, printed |
@@ -96,10 +96,8 @@ Terminals are skipped on purpose, as are password fields.
 `~/.config/gramly/config.toml`, optional, and written by the menu for you:
 
 ```toml
-enabled = true
 ai = true
 dialect = "american"   # british, canadian, australian, indian
-off_in = "com.tinyspeck.slackmacgap"   # apps turned off from the menu
 openrouter_key = "sk-or-..."
 ```
 

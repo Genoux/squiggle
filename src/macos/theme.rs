@@ -80,6 +80,52 @@ pub fn font(size: f64, weight: Weight) -> Retained<NSFont> {
     NSFont::systemFontOfSize_weight(size, weight)
 }
 
+/// The icon of one of the ⋯'s parts, `size` square, as a template so it
+/// takes the tint of whatever shows it; see `surface::theme::icon`.
+pub fn icon_image(action: crate::surface::Action, size: f64) -> Retained<NSImage> {
+    let shapes = icon(action);
+    let draw = block2::RcBlock::new(move |_rect: CGRect| -> Bool {
+        let s = size / 16.0;
+        NSColor::blackColor().setStroke();
+        NSColor::blackColor().setFill();
+        for shape in shapes {
+            let oval = |x: f64, y: f64, r: f64| {
+                NSBezierPath::bezierPathWithOvalInRect(CGRect::new(
+                    CGPoint::new((x - r) * s, (y - r) * s),
+                    CGSize::new(r * 2.0 * s, r * 2.0 * s),
+                ))
+            };
+            let path = match *shape {
+                Shape::Dot { x, y, r } => {
+                    oval(x, y, r).fill();
+                    continue;
+                }
+                Shape::Ring { x, y, r } => oval(x, y, r),
+                Shape::Line { from, to } => {
+                    let path = NSBezierPath::bezierPath();
+                    path.moveToPoint(CGPoint::new(from.0 * s, from.1 * s));
+                    path.lineToPoint(CGPoint::new(to.0 * s, to.1 * s));
+                    path
+                }
+                Shape::Bar { x, y, w, h, r } => {
+                    NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(
+                        CGRect::new(CGPoint::new(x * s, y * s), CGSize::new(w * s, h * s)),
+                        r * s,
+                        r * s,
+                    )
+                }
+            };
+            path.setLineWidth(ICON_STROKE * s);
+            path.setLineCapStyle(NSLineCapStyle::Round);
+            path.stroke();
+        }
+        Bool::YES
+    });
+    let image = NSImage::imageWithSize_flipped_drawingHandler(CGSize::new(size, size), true, &draw);
+    image.setTemplate(true);
+    image
+}
+
 /// A cross for closing and removing, as a template so it takes the button's
 /// tint.
 pub fn cross(size: f64) -> Retained<NSImage> {

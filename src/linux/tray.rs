@@ -110,13 +110,11 @@ mod tests {
 
     fn status() -> Status {
         Status {
-            line: "Gramly is on".into(),
             trusted: true,
             ai: false,
-            paused: false,
-            front: Some(("firefox".into(), "Firefox".into())),
-            off_here: false,
-            terminal: false,
+            paused: None,
+            blocked: None,
+            off: Vec::new(),
             dialect: "british".into(),
         }
     }
@@ -149,13 +147,9 @@ mod tests {
             shared.iter().map(|item| *item == Item::Separator).collect();
         assert_eq!(drawn_separators, shared_separators);
         let names: Vec<&str> = drawn.iter().filter_map(label).collect();
-        assert_eq!(names[0], "Gramly is on");
-        assert_eq!(names[1], "Pause for an hour");
-        assert_eq!(names[2], "Turn off in Firefox");
-        assert_eq!(
-            names.last(),
-            Some(&concat!("Quit Gramly ", env!("CARGO_PKG_VERSION")))
-        );
+        assert_eq!(names[0], concat!("Gramly ", env!("CARGO_PKG_VERSION")));
+        assert_eq!(names[1], "Pause");
+        assert_eq!(names.last(), Some(&"Quit Gramly"));
     }
 
     #[test]
@@ -163,7 +157,7 @@ mod tests {
         let (tray, _) = tray();
         let menu = tray.menu();
         let MenuItem::Standard(note) = &menu[0] else {
-            panic!("the status line is a standard item");
+            panic!("the name is a standard item");
         };
         assert!(!note.enabled);
     }
@@ -186,9 +180,8 @@ mod tests {
     fn the_spelling_submenu_is_rendered_with_its_choices() {
         let (tray, _) = tray();
         let menu = tray.menu();
-        let Some(MenuItem::SubMenu(spelling)) = menu
-            .iter()
-            .find(|item| matches!(item, MenuItem::SubMenu(_)))
+        let Some(MenuItem::SubMenu(spelling)) =
+            menu.iter().find(|item| label(item) == Some("Spelling"))
         else {
             panic!("no spelling submenu");
         };

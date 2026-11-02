@@ -2,7 +2,12 @@
 //! card. There is no Accept-all pill: Grammarly has none, and a badge in
 //! the corner of every field was noise.
 //!
-//! All three are non-activating panels. Clicking Accept must not take focus
+//! The card's ⋯ opens a small menu of its own, in the card's look: "Don't
+//! suggest in this field" and the hour's pause. Drawn rather than an
+//! NSMenu, so it looks the same on Linux, and inside the hover corridor, so
+//! reaching for it never closes the card.
+//!
+//! All of them are non-activating panels. Clicking Accept must not take focus
 //! away from the field being corrected - an activating window would, the
 //! caret would leave the text, and the user would have to click back in to
 //! keep typing. The underline panel and the card's shadow ignore the mouse
@@ -17,18 +22,20 @@
 use crate::macos::primary_height;
 use crate::macos::theme::{
     self, ABOVE_BUTTONS, BETWEEN_BUTTONS, BUTTON_HEIGHT, BUTTON_OUTLINE, BUTTON_SIDE, CARD_PAD,
-    CARD_RISE, CARD_TITLE, CARD_WIDTH, DOT, EDGE_WIDTH, Face, NEW_WORD_PAD, NEW_WORDS, Palette,
-    Rgba, SENTENCE, SENTENCE_LINE, SHADE, SHADOW_SOFT, SHADOW_TIGHT, Shadow, TITLE_INDENT,
-    TITLE_LINE, UNDER_TITLE, UNDERLINE_BLEED, UNDERLINE_HEIGHT, UNDERLINE_OFFSET,
+    CARD_RISE, CARD_TITLE, CARD_WIDTH, DOT, EDGE_WIDTH, Face, MENU_ICON, MENU_PAD, MENU_RULE,
+    MENU_WIDTH, MORE, MORE_ICON, MORE_OUT, NEW_WORD_PAD, NEW_WORDS, Palette, Rgba, SENTENCE,
+    SENTENCE_LINE, SHADE, SHADOW_SOFT, SHADOW_TIGHT, Shadow, TITLE_INDENT, TITLE_LINE, UNDER_TITLE,
+    UNDERLINE_BLEED, UNDERLINE_HEIGHT, UNDERLINE_OFFSET,
 };
+use crate::surface::card::MENU;
 use crate::surface::{self, Action, Bit, Card, Mark, Point, Rect, place_card};
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, Bool, Sel};
 use objc2::{AnyThread, MainThreadMarker, MainThreadOnly, sel};
 use objc2_app_kit::{
     NSBackingStoreType, NSBaselineOffsetAttributeName, NSButton, NSColor, NSFontAttributeName,
-    NSForegroundColorAttributeName, NSLayoutManager, NSLineBreakMode, NSMutableParagraphStyle,
-    NSPanel, NSParagraphStyleAttributeName, NSScreen, NSStatusWindowLevel,
+    NSForegroundColorAttributeName, NSImageView, NSLayoutManager, NSLineBreakMode,
+    NSMutableParagraphStyle, NSPanel, NSParagraphStyleAttributeName, NSScreen, NSStatusWindowLevel,
     NSStrikethroughColorAttributeName, NSStrikethroughStyleAttributeName, NSTextContainer,
     NSTextField, NSTextStorage, NSTextView, NSView, NSWindowAnimationBehavior,
     NSWindowCollectionBehavior, NSWindowStyleMask,
@@ -147,9 +154,15 @@ pub struct Overlay {
     /// the card's panel, the shadow's pixels would take clicks meant for the
     /// text below the card.
     shade: Retained<NSPanel>,
-    /// The card's buttons, and which one the pointer is over.
+    /// The card's buttons, its ⋯ first.
     rows: Vec<Row>,
-    lit: Option<usize>,
+    /// The ⋯'s menu, its shadow and its items.
+    menu: Retained<NSPanel>,
+    menu_shade: Retained<NSPanel>,
+    menu_rows: Vec<Row>,
+    /// What is lit: the card's button and the menu's item under the
+    /// pointer, and whether the menu is open (its ⋯ stays lit).
+    lit: Option<(Option<usize>, Option<usize>, bool)>,
 }
 
 impl Overlay {
@@ -164,8 +177,23 @@ impl Overlay {
             card: panel(mtm, true, NSStatusWindowLevel + 1),
             shade: panel(mtm, false, NSStatusWindowLevel),
             rows: Vec::new(),
+            // Over the card, and its shadow with it.
+            menu: panel(mtm, true, NSStatusWindowLevel + 2),
+            menu_shade: panel(mtm, false, NSStatusWindowLevel + 1),
+            menu_rows: Vec::new(),
             lit: None,
         }
+    }
+
+    fn hide_menu(&mut self) {
+        if self.menu.isVisible() {
+            self.menu.orderOut(None);
+        }
+        if self.menu_shade.isVisible() {
+            self.menu_shade.orderOut(None);
+        }
+        self.menu_rows.clear();
+        self.lit = None;
     }
 }
 
@@ -233,19 +261,24 @@ impl surface::Overlay for Overlay {
         if !self.card.isVisible() {
             return Vec::new();
         }
-        let origin = self.card.frame().origin;
-        self.rows
-            .iter()
-            .filter_map(|row| {
-                let f = row.view.frame();
-                let on_screen = CGRect::new(
-                    CGPoint::new(origin.x + f.origin.x, origin.y + f.origin.y),
-                    f.size,
-                );
-                row.action
-                    .map(|action| (action, from_cocoa(on_screen, self.mtm)))
-            })
-            .collect()
+        let on_screen = |panel: &NSPanel, rows: &[Row]| {
+            let origin = panel.frame().origin;
+            rows.iter()
+                .filter_map(|row| {
+                    let f = row.view.frame();
+                    let at = CGRect::new(
+                        CGPoint::new(origin.x + f.origin.x, origin.y + f.origin.y),
+                        f.size,
+                    );
+                    row.action.map(|action| (action, from_cocoa(at, self.mtm)))
+                })
+                .collect::<Vec<_>>()
+        };
+        let mut rows = on_screen(&self.card, &self.rows);
+        if self.menu.isVisible() {
+            rows.extend(on_screen(&self.menu, &self.menu_rows));
+        }
+        rows
     }
 
     fn card_frame(&self) -> Option<Rect> {
@@ -255,6 +288,7 @@ impl surface::Overlay for Overlay {
     }
 
     fn show_card(&mut self, index: usize, content: &Card, word: Rect) {
+        self.hide_menu();
         let palette = theme::palette(self.mtm);
         let built = build(index, content, &self.target, palette, self.mtm);
         self.rows = built.rows;
@@ -295,6 +329,7 @@ impl surface::Overlay for Overlay {
     }
 
     fn hide_card(&mut self) {
+        self.hide_menu();
         if self.card.isVisible() {
             self.card.orderOut(None);
         }
@@ -312,25 +347,75 @@ impl surface::Overlay for Overlay {
         if !self.card.isVisible() {
             return;
         }
-        let origin = self.card.frame().origin;
-        let at = Point {
-            x: pointer.x - origin.x,
-            y: primary_height(self.mtm) - pointer.y - origin.y,
+        let under = |panel: &NSPanel, rows: &[Row]| {
+            let origin = panel.frame().origin;
+            let at = Point {
+                x: pointer.x - origin.x,
+                y: primary_height(self.mtm) - pointer.y - origin.y,
+            };
+            rows.iter()
+                .position(|row| Rect::from(row.view.frame()).contains(at))
         };
-        let now = self
-            .rows
-            .iter()
-            .position(|row| Rect::from(row.view.frame()).contains(at));
+        let open = self.menu.isVisible();
+        let in_menu = open.then(|| under(&self.menu, &self.menu_rows)).flatten();
+        // The menu sits over the card: what is under it is not hovered.
+        let on_menu = self.menu_frame().is_some_and(|f| f.contains(pointer));
+        let in_card = if on_menu {
+            None
+        } else {
+            under(&self.card, &self.rows)
+        };
+        let now = Some((in_card, in_menu, open));
         if now == self.lit {
             return;
         }
         CATransaction::begin();
         CATransaction::setAnimationDuration(theme::HOVER_FADE.as_secs_f64());
         for (i, row) in self.rows.iter().enumerate() {
-            row.light(Some(i) == now);
+            row.light(Some(i) == in_card || (open && row.action == Some(Action::More)));
+        }
+        for (i, row) in self.menu_rows.iter().enumerate() {
+            row.light(Some(i) == in_menu);
         }
         CATransaction::commit();
         self.lit = now;
+    }
+
+    /// Opens the ⋯'s menu under the ⋯, or closes it if open.
+    fn toggle_menu(&mut self) {
+        if self.menu.isVisible() {
+            self.hide_menu();
+            return;
+        }
+        let Some(card) = self.card_frame() else {
+            return;
+        };
+        let p = theme::palette(self.mtm);
+        let built = menu(&self.target, p, self.mtm);
+        self.menu_rows = built.rows;
+        self.lit = None;
+        let at = to_cocoa(theme::menu_at(card), self.mtm);
+        self.menu.setContentView(Some(&built.view));
+        let shade = shade(at.size, p, self.mtm);
+        self.menu_shade.setContentView(Some(&shade));
+        self.menu_shade.setFrame_display(
+            CGRect::new(
+                CGPoint::new(at.origin.x - SHADE.0, at.origin.y - SHADE.3),
+                shade.frame().size,
+            ),
+            true,
+        );
+        self.menu.setFrame_display(at, true);
+        fade_in(&shade, CARD_RISE);
+        fade_in(&built.view, CARD_RISE);
+        self.menu_shade.orderFrontRegardless();
+        self.menu.orderFrontRegardless();
+    }
+
+    fn menu_frame(&self) -> Option<Rect> {
+        self.menu
+            .isVisible()
+            .then(|| from_cocoa(self.menu.frame(), self.mtm))
     }
 }
 
@@ -426,6 +511,106 @@ fn button(
     } else {
         (theme::CLEAR, p.fill, Some(p.line))
     };
+    finish(view, rest, hover, line, selector, action, tag, target, mtm)
+}
+
+/// `image`, tinted the card's second text colour, `side` square at `x` in a
+/// view `height` high.
+fn glyph(
+    action: Action,
+    side: f64,
+    x: f64,
+    height: f64,
+    p: &Palette,
+    mtm: MainThreadMarker,
+) -> Retained<NSImageView> {
+    let shown = NSImageView::imageViewWithImage(&theme::icon_image(action, side), mtm);
+    shown.setContentTintColor(Some(&theme::ns(p.text2)));
+    shown.setFrame(CGRect::new(
+        CGPoint::new(x, ((height - side) / 2.0).round()),
+        CGSize::new(side, side),
+    ));
+    shown
+}
+
+/// The card's ⋯: a square button showing only its dots.
+fn more_button(tag: isize, target: &AnyObject, p: &Palette, mtm: MainThreadMarker) -> Row {
+    let view = layer_view(
+        CGRect::new(CGPoint::new(0.0, 0.0), CGSize::new(MORE, MORE)),
+        mtm,
+    );
+    view.addSubview(&glyph(
+        Action::More,
+        MORE_ICON,
+        (MORE - MORE_ICON) / 2.0,
+        MORE,
+        p,
+        mtm,
+    ));
+    let action = Action::More;
+    finish(
+        view,
+        theme::CLEAR,
+        p.fill,
+        None,
+        selector(action),
+        Some(action),
+        tag,
+        target,
+        mtm,
+    )
+}
+
+/// One item of the ⋯'s menu: an icon and its words, the width of the menu.
+fn menu_item(action: Action, target: &AnyObject, p: &Palette, mtm: MainThreadMarker) -> Row {
+    let width = MENU_WIDTH - MENU_PAD * 2.0;
+    let view = layer_view(
+        CGRect::new(CGPoint::new(0.0, 0.0), CGSize::new(width, BUTTON_HEIGHT)),
+        mtm,
+    );
+    view.addSubview(&glyph(
+        action,
+        MENU_ICON,
+        BUTTON_SIDE - 2.0,
+        BUTTON_HEIGHT,
+        p,
+        mtm,
+    ));
+    let caption = label(action.label(), theme::BUTTON, p.text, mtm);
+    let fit = caption.fittingSize();
+    let x = BUTTON_SIDE - 2.0 + MENU_ICON + 10.0;
+    caption.setFrame(CGRect::new(
+        CGPoint::new(x, ((BUTTON_HEIGHT - fit.height) / 2.0).round()),
+        CGSize::new(width - x - BUTTON_SIDE, fit.height),
+    ));
+    view.addSubview(&caption);
+    finish(
+        view,
+        theme::CLEAR,
+        p.fill,
+        None,
+        selector(action),
+        Some(action),
+        0,
+        target,
+        mtm,
+    )
+}
+
+/// Makes `view` a button: its corners and colours, and a transparent button
+/// over the whole of it, so the button is the target and not just its words.
+#[allow(clippy::too_many_arguments)]
+fn finish(
+    view: Retained<NSView>,
+    rest: Rgba,
+    hover: Rgba,
+    line: Option<Rgba>,
+    selector: Sel,
+    action: Option<Action>,
+    tag: isize,
+    target: &AnyObject,
+    mtm: MainThreadMarker,
+) -> Row {
     let row = Row {
         view,
         rest,
@@ -479,6 +664,9 @@ fn selector(action: Action) -> Sel {
         Action::Learn => sel!(learn:),
         Action::AcceptSentence => sel!(acceptSentence:),
         Action::DismissSentence => sel!(dismissSentence:),
+        Action::More => sel!(more:),
+        Action::OffHere => sel!(offHere:),
+        Action::PauseHour => sel!(pauseHour:),
     }
 }
 
@@ -567,14 +755,23 @@ pub(crate) fn build(
             CARD_PAD + TITLE_INDENT,
             top - TITLE_LINE + ((TITLE_LINE - heading_h) / 2.0).round(),
         ),
-        CGSize::new(inner - TITLE_INDENT, heading_h),
+        CGSize::new(
+            inner - TITLE_INDENT - (MORE - MORE_OUT) - BETWEEN_BUTTONS,
+            heading_h,
+        ),
     ));
     view.addSubview(&heading);
+    let more = more_button(tag, target, p, mtm);
+    more.view.setFrameOrigin(CGPoint::new(
+        CARD_WIDTH - CARD_PAD - MORE + MORE_OUT,
+        top - TITLE_LINE / 2.0 - MORE / 2.0,
+    ));
+    view.addSubview(&more.view);
     top -= TITLE_LINE + UNDER_TITLE + sentence_h;
     sentence.setFrameOrigin(CGPoint::new(CARD_PAD, top));
     view.addSubview(&sentence);
 
-    let mut rows = Vec::new();
+    let mut rows = vec![more];
     for (row, line) in placed {
         let y =
             CARD_PAD + buttons_h - BUTTON_HEIGHT - line as f64 * (BUTTON_HEIGHT + BETWEEN_BUTTONS);
@@ -582,6 +779,55 @@ pub(crate) fn build(
             .setFrameOrigin(CGPoint::new(row.view.frame().origin.x, y));
         view.addSubview(&row.view);
         rows.push(row);
+    }
+    Built { view, rows }
+}
+
+/// The ⋯'s menu, its items top to bottom with a rule between them, sized
+/// as `theme::menu_at` places it.
+pub(crate) fn menu(target: &AnyObject, p: &Palette, mtm: MainThreadMarker) -> Built {
+    let size = theme::menu_at(Rect {
+        x: 0.0,
+        y: 0.0,
+        w: 0.0,
+        h: 0.0,
+    });
+    let view = layer_view(
+        CGRect::new(CGPoint::new(0.0, 0.0), CGSize::new(size.w, size.h)),
+        mtm,
+    );
+    still(|| {
+        if let Some(layer) = view.layer() {
+            layer.setBackgroundColor(Some(&theme::cg(p.surface)));
+            layer.setCornerRadius(theme::CORNER);
+            layer.setBorderWidth(EDGE_WIDTH);
+            layer.setBorderColor(Some(&theme::cg(p.edge)));
+        }
+    });
+    let mut rows = Vec::new();
+    let mut top = size.h - MENU_PAD;
+    for (i, action) in MENU.into_iter().enumerate() {
+        if i > 0 {
+            let rule = layer_view(
+                CGRect::new(
+                    CGPoint::new(MENU_PAD + 6.0, top - (MENU_RULE + 1.0) / 2.0),
+                    CGSize::new(size.w - (MENU_PAD + 6.0) * 2.0, 1.0),
+                ),
+                mtm,
+            );
+            still(|| {
+                if let Some(layer) = rule.layer() {
+                    layer.setBackgroundColor(Some(&theme::cg(p.line)));
+                }
+            });
+            view.addSubview(&rule);
+            top -= MENU_RULE;
+        }
+        top -= BUTTON_HEIGHT;
+        let item = menu_item(action, target, p, mtm);
+        item.view.setFrameOrigin(CGPoint::new(MENU_PAD, top));
+        view.addSubview(&item.view);
+        rows.push(item);
     }
     Built { view, rows }
 }

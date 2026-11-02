@@ -138,7 +138,7 @@ fn click_through(window: &gtk::Window) {
     take_input_in(window, &[]);
 }
 
-fn rounded(context: &cairo::Context, rect: Rect, radius: f64) {
+pub(super) fn rounded(context: &cairo::Context, rect: Rect, radius: f64) {
     let (right, bottom) = (rect.x + rect.w, rect.y + rect.h);
     let quarter = std::f64::consts::FRAC_PI_2;
     context.new_sub_path();
@@ -400,6 +400,29 @@ impl surface::Overlay for LayerOverlay {
         }
     }
 
+    /// The menu is part of the card's surface, over its words, so it takes
+    /// the pointer with the card and needs no surface of its own.
+    fn toggle_menu(&mut self) {
+        if let Some(shown) = &self.shown {
+            let open = !shown.built.menu.is_visible();
+            shown.built.menu.set_visible(open);
+            if open {
+                shown.built.more.add_css_class("gramly-open");
+            } else {
+                shown.built.more.remove_css_class("gramly-open");
+            }
+        }
+    }
+
+    fn menu_frame(&self) -> Option<Rect> {
+        let shown = self.shown.as_ref()?;
+        shown
+            .built
+            .menu
+            .is_visible()
+            .then(|| theme::menu_at(shown.frame))
+    }
+
     fn card_frame(&self) -> Option<Rect> {
         self.shown.as_ref().map(|shown| shown.frame)
     }
@@ -412,6 +435,7 @@ impl surface::Overlay for LayerOverlay {
             .built
             .rows
             .iter()
+            .filter(|(_, row)| row.is_mapped())
             .filter_map(|(action, row)| {
                 let bounds = row.compute_bounds(&shown.built.root)?;
                 Some((
