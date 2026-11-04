@@ -8,13 +8,17 @@ use gramly_core::Config;
 use objc2::MainThreadMarker;
 use objc2_app_kit::NSEvent;
 use objc2_foundation::NSString;
-use std::collections::HashSet;
-use std::time::Instant;
+use std::collections::HashMap;
+use std::time::{Duration, Instant};
+
+/// How often an app whose focus reads as no text field is asked again to
+/// expose its text (see `ax::wake`).
+const REWAKE: Duration = Duration::from_secs(5);
 
 pub struct MacHost {
     mtm: MainThreadMarker,
-    /// Apps already asked to expose their text (see `ax::wake`).
-    woken: HashSet<i32>,
+    /// When each app was last asked to expose its text (see `ax::wake`).
+    woken: HashMap<i32, Instant>,
     /// The process in front last tick, Gramly included.
     front_pid: Option<i32>,
 }
@@ -23,7 +27,7 @@ impl MacHost {
     pub fn new(mtm: MainThreadMarker) -> Self {
         Self {
             mtm,
-            woken: HashSet::new(),
+            woken: HashMap::new(),
             front_pid: None,
         }
     }
@@ -53,13 +57,26 @@ impl Host for MacHost {
             }
         }
         // Chromium and Electron build their accessibility tree only for an
-        // app that asks; ask each app once, when it first comes forward.
-        if let Some(pid) = front_pid
-            && self.woken.insert(pid)
+        // app that asks. Ask each app when it first comes forward, and again
+        // whenever its focus reads as no text field: Slack dropped its tree
+        // hours after the first ask and reported no focused element until it
+        // was asked again.
+        let Some(pid) = front_pid else {
+            return ax::focus(current);
+        };
+        self.woken.entry(pid).or_insert_with(|| {
+            ax::wake(pid);
+            Instant::now()
+        });
+        let focus = ax::focus(current);
+        if matches!(focus, Focus::Unknown | Focus::Elsewhere)
+            && pid != std::process::id() as i32
+            && self.woken[&pid].elapsed() >= REWAKE
         {
             ax::wake(pid);
+            self.woken.insert(pid, Instant::now());
         }
-        ax::focus(current)
+        focus
     }
 
     fn pointer(&self) -> Point {
