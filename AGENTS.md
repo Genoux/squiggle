@@ -546,7 +546,11 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
 - Every app is sent `AXManualAccessibility = true` once when it first comes
   forward (`ax::wake`). Electron and Chromium build no accessibility tree
   without it, which is how Grammarly works in a Claude or Slack text box
-  where Gramly showed nothing.
+  where Gramly showed nothing. Once is not enough: Slack, woken at 07:48,
+  worked until mid-morning and then answered "no focused element" with
+  its message box focused, so nothing was checked and nothing was logged;
+  asked again, it answered at once. The front app is asked again whenever
+  its focus reads as no text field, at most every 5s (`REWAKE`).
 - Chromium text areas (the ChatGPT/Codex app, and likely every Electron
   composer) answer `AXBoundsForRange` with an empty rectangle at x = 0 for
   any range. Their `AXStaticText` children answer correctly, so
