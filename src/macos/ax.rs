@@ -36,6 +36,19 @@ const SKIPPED_APPS: &[&str] = &[
     "com.stablyai.orca",
 ];
 
+/// Gecko browsers. They ignore `AXManualAccessibility` and build their tree
+/// on `AXEnhancedUserInterface`, the attribute VoiceOver sets (see `wake`).
+/// Only they are sent it: other apps slow their window animations under it.
+const GECKO_APPS: &[&str] = &[
+    "app.zen-browser.zen",
+    "org.mozilla.firefox",
+    "org.mozilla.firefoxdeveloperedition",
+    "org.mozilla.nightly",
+    "org.mozilla.librewolf",
+    "net.waterfox.waterfox",
+    "one.ablaze.floorp",
+];
+
 /// Roles that hold prose the user is typing. Secure fields are deliberately
 /// absent: a password is never read, let alone sent anywhere.
 const TEXT_ROLES: &[&str] = &["AXTextArea", "AXTextField", "AXComboBox", "AXSearchField"];
@@ -236,13 +249,24 @@ pub fn frontmost_window_title() -> Option<String> {
 /// why it showed in a Claude chat box where Gramly did not. Apps that do not
 /// know the attribute ignore it. Skipped apps are not asked: Orca, an
 /// Electron terminal, stopped taking pasted images once Gramly woke it.
+///
+/// Zen (Gecko) answers `AXManualAccessibility` as unsupported and dropped
+/// its tree to the window's three buttons, reporting the window as focused
+/// while a field in the page had it; set, `AXEnhancedUserInterface` brought
+/// the page back (6 nodes to 416). It had worked while another app kept it
+/// set.
 pub fn wake(pid: i32) {
-    if SKIPPED_APPS.contains(&bundle_id(pid).as_str()) {
+    let bundle = bundle_id(pid);
+    if SKIPPED_APPS.contains(&bundle.as_str()) {
         return;
     }
     let app = unsafe { AXUIElement::new_application(pid) };
     unsafe { app.set_messaging_timeout(MESSAGING_TIMEOUT) };
-    let name = CFString::from_static_str("AXManualAccessibility");
+    let name = if GECKO_APPS.contains(&bundle.as_str()) {
+        CFString::from_static_str("AXEnhancedUserInterface")
+    } else {
+        CFString::from_static_str("AXManualAccessibility")
+    };
     let yes: &CFBoolean = CFBoolean::new(true);
     unsafe { app.set_attribute_value(&name, yes) };
 }
