@@ -550,7 +550,12 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
   worked until mid-morning and then answered "no focused element" with
   its message box focused, so nothing was checked and nothing was logged;
   asked again, it answered at once. The front app is asked again whenever
-  its focus reads as no text field, at most every 5s (`REWAKE`).
+  its focus reads as no text field, at most every 5s (`REWAKE`). Gecko browsers (Zen, Firefox) answer that attribute as unsupported and
+  are sent `AXEnhancedUserInterface` instead, the one VoiceOver sets: Zen's
+  tree fell to its window's three buttons, with the window reported as
+  focused, until it was set (6 nodes to 416). Gramly had worked in Zen only
+  while another app kept it set. Other apps are not sent it, since it
+  slows their window animations.
 - Chromium text areas (the ChatGPT/Codex app, and likely every Electron
   composer) answer `AXBoundsForRange` with an empty rectangle at x = 0 for
   any range. Their `AXStaticText` children answer correctly, so
