@@ -2632,7 +2632,7 @@ dependencies = [
 
 [[package]]
 name = "gramly"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "anyhow",
  "atspi-proxies",
@@ -2658,7 +2658,7 @@ dependencies = [
 
 [[package]]
 name = "gramly-core"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "anyhow",
  "harper-core",
