@@ -5081,7 +5081,7 @@ dependencies = [
 
 [[package]]
 name = "squiggle"
-version = "0.4.2"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "atspi-proxies",
@@ -5107,7 +5107,7 @@ dependencies = [
 
 [[package]]
 name = "squiggle-core"
-version = "0.4.2"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "harper-core",
