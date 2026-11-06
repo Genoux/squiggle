@@ -8,6 +8,8 @@
 	<string>Squiggle</string>
 	<key>CFBundleDisplayName</key>
 	<string>Squiggle</string>
+	<key>CFBundleIconFile</key>
+	<string>Squiggle</string>
 	<key>CFBundleExecutable</key>
 	<string>squiggle</string>
 	<key>CFBundlePackageType</key>

@@ -181,8 +181,9 @@ if [ -f "$agents/dev.genoux.gramly.plist" ] || [ -d "$apps/Gramly.app" ]; then
   launchctl bootout "gui/$(id -u)/dev.genoux.gramly" 2>/dev/null || true
   rm -rf "$agents/dev.genoux.gramly.plist" "$apps/Gramly.app"
 fi
-mkdir -p "$app/Contents/MacOS" "$agents" "$(dirname "$log")"
+mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources" "$agents" "$(dirname "$log")"
 cp "$binary" "$app/Contents/MacOS/squiggle"
+cp "$repo/assets/brand/generated/Squiggle.icns" "$app/Contents/Resources/Squiggle.icns"
 sed "s/@VERSION@/$version/g" "$repo/packaging/macos/Info.plist" > "$app/Contents/Info.plist"
 # Signed with a local certificate, made once and kept in the login keychain.
 # macOS ties the Accessibility grant to the signature's designated

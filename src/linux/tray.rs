@@ -6,13 +6,41 @@ use crate::surface::Status;
 use crate::surface::menu::{Command, Item, menu};
 use ksni::blocking::{Handle, TrayMethods};
 use ksni::menu::{CheckmarkItem, StandardItem, SubMenu};
-use ksni::{MenuItem, Tray};
+use ksni::{Icon, MenuItem, Tray};
 use std::sync::mpsc::Sender;
 
 pub struct SquiggleTray {
     status: Status,
+    /// Whether the desktop is dark, which picks the icon's colours.
+    dark: bool,
     commands: Sender<Command>,
 }
+
+/// The mark in raw ARGB32, as StatusNotifierItem carries it, rendered from
+/// `assets/brand/tray-{dark,light}.svg` by `assets/brand/build`: the binary
+/// needs no image decoder, and a release stays one file.
+const ICONS: [(bool, i32, &[u8]); 4] = [
+    (
+        true,
+        22,
+        include_bytes!("../../assets/brand/generated/tray-dark-22.argb"),
+    ),
+    (
+        true,
+        44,
+        include_bytes!("../../assets/brand/generated/tray-dark-44.argb"),
+    ),
+    (
+        false,
+        22,
+        include_bytes!("../../assets/brand/generated/tray-light-22.argb"),
+    ),
+    (
+        false,
+        44,
+        include_bytes!("../../assets/brand/generated/tray-light-44.argb"),
+    ),
+];
 
 type Action = Box<dyn Fn(&mut SquiggleTray) + Send>;
 
@@ -60,8 +88,12 @@ fn render(item: Item) -> MenuItem<SquiggleTray> {
 }
 
 impl SquiggleTray {
-    fn new(status: Status, commands: Sender<Command>) -> Self {
-        Self { status, commands }
+    fn new(status: Status, dark: bool, commands: Sender<Command>) -> Self {
+        Self {
+            status,
+            dark,
+            commands,
+        }
     }
 }
 
@@ -76,8 +108,16 @@ impl Tray for SquiggleTray {
         "Squiggle".into()
     }
 
-    fn icon_name(&self) -> String {
-        "tools-check-spelling".into()
+    fn icon_pixmap(&self) -> Vec<Icon> {
+        ICONS
+            .iter()
+            .filter(|(dark, ..)| *dark == self.dark)
+            .map(|&(_, size, data)| Icon {
+                width: size,
+                height: size,
+                data: data.to_vec(),
+            })
+            .collect()
     }
 
     fn menu(&self) -> Vec<MenuItem<Self>> {
@@ -88,16 +128,19 @@ impl Tray for SquiggleTray {
 pub struct TrayHandle(Handle<SquiggleTray>);
 
 impl TrayHandle {
-    pub fn show(&self, status: Status) {
-        self.0.update(|tray| tray.status = status);
+    pub fn show(&self, status: Status, dark: bool) {
+        self.0.update(|tray| {
+            tray.status = status;
+            tray.dark = dark;
+        });
     }
 }
 
 /// Spawned even when no tray host is up yet: at login Squiggle can start
 /// before the shell, and the icon should appear when the host does rather
 /// than never.
-pub fn spawn(status: Status, commands: Sender<Command>) -> anyhow::Result<TrayHandle> {
-    let handle = SquiggleTray::new(status, commands)
+pub fn spawn(status: Status, dark: bool, commands: Sender<Command>) -> anyhow::Result<TrayHandle> {
+    let handle = SquiggleTray::new(status, dark, commands)
         .assume_sni_available(true)
         .spawn()?;
     Ok(TrayHandle(handle))
@@ -121,7 +164,7 @@ mod tests {
 
     fn tray() -> (SquiggleTray, mpsc::Receiver<Command>) {
         let (sender, commands) = mpsc::channel();
-        (SquiggleTray::new(status(), sender), commands)
+        (SquiggleTray::new(status(), true, sender), commands)
     }
 
     fn label(item: &MenuItem<SquiggleTray>) -> Option<&str> {
@@ -186,5 +229,14 @@ mod tests {
             panic!("no spelling submenu");
         };
         assert_eq!(spelling.submenu.len(), crate::surface::DIALECTS.len());
+    }
+
+    #[test]
+    fn every_icon_is_its_size_in_argb() {
+        for (_, size, data) in ICONS {
+            assert_eq!(data.len(), (size * size * 4) as usize);
+        }
+        let (tray, _) = tray();
+        assert_eq!(tray.icon_pixmap().len(), 2);
     }
 }

@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# Renders every icon file the app and the site ship from the SVGs beside
+# this script. Run it after changing one of them, and commit what it writes.
+# Needs rsvg-convert and ImageMagick (brew install librsvg imagemagick) and
+# macOS's iconutil for the .icns.
+set -euo pipefail
+cd "$(dirname "$0")"
+out=generated
+rm -rf "$out" && mkdir -p "$out/png" "$out/Squiggle.iconset"
+
+# The app icon at every size a Dock, Finder, a site or a package asks for.
+for size in 16 32 48 64 128 256 512 1024; do
+  rsvg-convert -w "$size" -h "$size" app-icon.svg -o "$out/png/app-icon-$size.png"
+done
+for size in 16 32 128 256 512; do
+  cp "$out/png/app-icon-$size.png" "$out/Squiggle.iconset/icon_${size}x${size}.png"
+  rsvg-convert -w $((size * 2)) -h $((size * 2)) app-icon.svg \
+    -o "$out/Squiggle.iconset/icon_${size}x${size}@2x.png"
+done
+iconutil -c icns "$out/Squiggle.iconset" -o "$out/Squiggle.icns"
+rm -rf "$out/Squiggle.iconset"
+magick "$out"/png/app-icon-{16,32,48,64,128,256}.png "$out/squiggle.ico" < /dev/null
+
+# macOS menu bar: a template image, black on clear, 18 x 16 points drawn at
+# 2x. AppKit colours it for a light or dark bar.
+rsvg-convert -w 36 -h 32 menubar.svg -o "$out/menubar@2x.png"
+
+# Linux tray: StatusNotifierItem takes raw ARGB32 in network byte order, so
+# the binary carries the pixels and needs no image decoder. One set for a
+# dark panel, one for a light one.
+for tone in dark light; do
+  for size in 22 44; do
+    rsvg-convert -w "$size" -h "$size" "tray-$tone.svg" -o "$out/tray-$tone-$size.png"
+    magick "$out/tray-$tone-$size.png" -depth 8 "rgba:$out/tray-$tone-$size.rgba" < /dev/null
+    python3 -c 'import sys
+d = open(sys.argv[1], "rb").read()
+open(sys.argv[2], "wb").write(b"".join(d[i + 3:i + 4] + d[i:i + 3] for i in range(0, len(d), 4)))' \
+      "$out/tray-$tone-$size.rgba" "$out/tray-$tone-$size.argb"
+    rm "$out/tray-$tone-$size.rgba" "$out/tray-$tone-$size.png"
+  done
+done

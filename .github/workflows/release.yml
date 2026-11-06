@@ -66,6 +66,8 @@ jobs:
           mkdir -p "$name/bin"
           cp target/release/squiggle "$name/bin/"
           cp -r packaging "$name/"
+          mkdir -p "$name/assets/brand/generated"
+          cp assets/brand/generated/Squiggle.icns "$name/assets/brand/generated/"
           cp README.md TROUBLESHOOTING.md LICENSE "$name/"
           tar czf "$name.tar.gz" "$name"
           shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256"
