@@ -3,12 +3,12 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Ink, Gramly's design system</title>
-<meta name="description" content="Colours, type, measures and components for Gramly's card, underlines and dictionary.">
+<title>Ink, Squiggle's design system</title>
+<meta name="description" content="Colours, type, measures and components for Squiggle's card, underlines and dictionary.">
 <script>
   (function () {
     var mode = null;
-    try { mode = localStorage.getItem('gramly-ink-appearance'); } catch (e) {}
+    try { mode = localStorage.getItem('squiggle-ink-appearance'); } catch (e) {}
     if (!mode) mode = window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
     document.documentElement.dataset.appearance = mode;
   })();
@@ -16,11 +16,11 @@
 <style>
   /* The font is the app's own, from the repo. If a browser refuses to load
      it from disk, the page falls back to the system font. */
-  @font-face { font-family: "Gramly"; font-weight: 400; src: url("../assets/fonts/AtkinsonHyperlegibleNext-Regular.ttf") format("truetype"); }
-  @font-face { font-family: "Gramly"; font-weight: 500; src: url("../assets/fonts/AtkinsonHyperlegibleNext-Medium.ttf") format("truetype"); }
-  @font-face { font-family: "Gramly"; font-weight: 600; src: url("../assets/fonts/AtkinsonHyperlegibleNext-SemiBold.ttf") format("truetype"); }
+  @font-face { font-family: "Squiggle"; font-weight: 400; src: url("../assets/fonts/AtkinsonHyperlegibleNext-Regular.ttf") format("truetype"); }
+  @font-face { font-family: "Squiggle"; font-weight: 500; src: url("../assets/fonts/AtkinsonHyperlegibleNext-Medium.ttf") format("truetype"); }
+  @font-face { font-family: "Squiggle"; font-weight: 600; src: url("../assets/fonts/AtkinsonHyperlegibleNext-SemiBold.ttf") format("truetype"); }
 
-  /* ============ Gramly's tokens, as in tokens.json ============ */
+  /* ============ Squiggle's tokens, as in tokens.json ============ */
   :root, .lt {
     --surface: #FFFFFF; --text: #18181B; --text2: #66666E; --line: #00000021; --fill: #F0F0F2;
     --ink: #18181B; --ink-hover: #303036; --on-ink: #FFFFFF; --edge: #0000001F;
@@ -40,7 +40,7 @@
   }
   .lt { color-scheme: light; }
   :root { --mistake: #E5484D; --advice: #4A7BF7; --accepted: #30A46C57;
-    --font: "Gramly", "Atkinson Hyperlegible Next", system-ui, sans-serif;
+    --font: "Squiggle", "Atkinson Hyperlegible Next", system-ui, sans-serif;
     --corner: 8px; --corner-control: 6px; --corner-inline: 3px; }
 
   /* ============ Page ============ */
@@ -118,7 +118,7 @@
   .corner-box { width: 140px; height: 96px; background: var(--surface); box-shadow: var(--shadow); display: flex; flex-direction: column; justify-content: flex-end; padding: 12px; font-size: 12.5px; color: var(--text2); }
   .corner-box b { color: var(--text); font-size: 20px; font-weight: 650; line-height: 1.1; }
 
-  /* ============ Gramly components ============ */
+  /* ============ Squiggle components ============ */
   .g { font-family: var(--font); color: var(--text); -webkit-font-smoothing: antialiased; text-align: left; }
 
   .g-card { width: 340px; max-width: 100%; padding: 16px; border-radius: var(--corner); background: var(--surface); box-shadow: var(--shadow); }
@@ -142,7 +142,7 @@
     padding: 2px 4px; margin: 0 1px; -webkit-box-decoration-break: clone; box-decoration-break: clone; }
   .g-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
 
-  /* Buttons change at once under the pointer: nothing in Gramly animates but the card's arrival. */
+  /* Buttons change at once under the pointer: nothing in Squiggle animates but the card's arrival. */
   .g-btn { height: 32px; padding: 0 12px; border-radius: var(--corner-control); font-size: 13.5px; font-weight: 500; line-height: 1; white-space: nowrap;
     color: var(--text); box-shadow: inset 0 0 0 1px var(--line); }
   .g-btn:hover, .g-btn.is-hover { background: var(--fill); box-shadow: none; }
@@ -230,9 +230,9 @@
 
   <main>
     <header class="hero">
-      <div class="kicker">Gramly's design system</div>
+      <div class="kicker">Squiggle's design system</div>
       <h1>Ink</h1>
-      <p class="lede"><strong>Gramly draws on top of other people's apps, so it stays quiet.</strong> It uses neutral surfaces, black or white for the main action, and colour only where colour means something. Nothing here belongs to macOS, so the Linux surface draws the same thing.</p>
+      <p class="lede"><strong>Squiggle draws on top of other people's apps, so it stays quiet.</strong> It uses neutral surfaces, black or white for the main action, and colour only where colour means something. Nothing here belongs to macOS, so the Linux surface draws the same thing.</p>
       <div class="bar">
         <span>Appearance</span>
         <div class="seg" role="group" aria-label="Appearance"><button type="button" data-key="appearance" data-val="light">Light</button><button type="button" data-key="appearance" data-val="dark">Dark</button></div>
@@ -246,13 +246,13 @@
         <li><strong>Quiet on top of anything</strong>Neutral surfaces in the system's light or dark. Underlines look the same in both, because the app underneath can be either.</li>
         <li><strong>Colour means wrong or right</strong>Red is a mistake and the words it takes out. Blue is clearer wording. Green is what a fix puts in. Colour never means "click here".</li>
         <li><strong>One of each</strong>One card for every suggestion, one button size and one motion. A new kind of suggestion fits the card; it doesn't get its own.</li>
-        <li><strong>The same everywhere</strong>Gramly brings its own font and shadow. It uses no system accent, no vibrancy and no SF font, so a Mac and Hyprland look alike.</li>
+        <li><strong>The same everywhere</strong>Squiggle brings its own font and shadow. It uses no system accent, no vibrancy and no SF font, so a Mac and Hyprland look alike.</li>
       </ul>
     </section>
 
     <section id="colour">
       <h2>Colour</h2>
-      <p>Every colour Gramly draws, in both appearances. The card and the dictionary follow the system; the colours under <em>Both</em> are drawn over other apps and never change.</p>
+      <p>Every colour Squiggle draws, in both appearances. The card and the dictionary follow the system; the colours under <em>Both</em> are drawn over other apps and never change.</p>
 
       <h3>Surfaces and text</h3>
       <table class="tokens">
@@ -310,7 +310,7 @@
         <li><span class="spec"><b>Field and list</b>14 regular</span><span class="s" style="font-size:14px">Hyprland</span></li>
         <li><span class="spec"><b>Buttons</b>13.5 medium, main semibold</span><span class="s" style="font-size:13.5px;font-weight:500">Dismiss · <span style="font-weight:600">Accept</span></span></li>
         <li><span class="spec"><b>Card title</b>13 medium, <code>text2</code></span><span class="s" style="font-size:13px;font-weight:500;color:var(--pg-ink2)">Correct your spelling</span></li>
-        <li><span class="spec"><b>Hint</b>13 regular, <code>text2</code></span><span class="s" style="font-size:13px;color:var(--pg-ink2)">Gramly never flags these words.</span></li>
+        <li><span class="spec"><b>Hint</b>13 regular, <code>text2</code></span><span class="s" style="font-size:13px;color:var(--pg-ink2)">Squiggle never flags these words.</span></li>
         <li><span class="spec"><b>Count</b>12.5 regular, <code>text2</code></span><span class="s" style="font-size:12.5px;color:var(--pg-ink2)">7 words</span></li>
       </ul>
     </section>
@@ -351,7 +351,7 @@
         </div>
       </div>
       <h3>The card's shadow</h3>
-      <p>Gramly draws its own, in a panel that ignores the pointer, so it looks the same on Linux and clicks beside the card reach the text. It has a half-point hairline (<code>edge</code>), a tight shadow at the edge (drop 1, blur 2) and a soft one below (inset 12, drop 14, blur 18). It's stronger in Dark (0.7) than in Light (0.2), because a shadow barely shows on a dark app. The dictionary uses the system's window shadow for now.</p>
+      <p>Squiggle draws its own, in a panel that ignores the pointer, so it looks the same on Linux and clicks beside the card reach the text. It has a half-point hairline (<code>edge</code>), a tight shadow at the edge (drop 1, blur 2) and a soft one below (inset 12, drop 14, blur 18). It's stronger in Dark (0.7) than in Light (0.2), because a shadow barely shows on a dark app. The dictionary uses the system's window shadow for now.</p>
     </section>
 
     <section id="motion">
@@ -456,15 +456,15 @@
 
     <section id="dictionary">
       <h2>Dictionary</h2>
-      <p>Opened from the menu. It's a borderless window with Gramly's own header and close cross, the card's surface, and the same buttons. It has a field to add a word and a list to remove one from. Escape and Ctrl/⌘-W close it.</p>
+      <p>Opened from the menu. It's a borderless window with Squiggle's own header and close cross, the card's surface, and the same buttons. It has a field to add a word and a list to remove one from. Escape and Ctrl/⌘-W close it.</p>
       <div class="well">
         <div class="g g-window">
           <div class="g-window-head"><h4>Dictionary</h4><button class="g-icon" type="button" aria-label="Close"><svg><use href="#x"/></svg></button></div>
-          <p class="g-sub">Gramly never flags these words.</p>
+          <p class="g-sub">Squiggle never flags these words.</p>
           <div class="g-add"><div class="g-field">Add a word</div><button class="g-btn" type="button">Add</button></div>
           <ul class="g-words">
             <li>Fieldtrip<button class="g-icon" type="button" aria-label="Remove Fieldtrip"><svg><use href="#x"/></svg></button></li>
-            <li>Gramly<button class="g-icon" type="button" aria-label="Remove Gramly"><svg><use href="#x"/></svg></button></li>
+            <li>Squiggle<button class="g-icon" type="button" aria-label="Remove Squiggle"><svg><use href="#x"/></svg></button></li>
             <li>Hyprland<button class="g-icon" type="button" aria-label="Remove Hyprland"><svg><use href="#x"/></svg></button></li>
             <li>Wayland<button class="g-icon" type="button" aria-label="Remove Wayland"><svg><use href="#x"/></svg></button></li>
           </ul>
@@ -479,7 +479,7 @@
         <li><code>design/tokens.json</code>: every value on this page, for the code and for the Linux surface.</li>
         <li><code>src/macos/theme.rs</code>: colours, corners and the font. Card, button and dictionary measures are in <code>overlay.rs</code> and <code>dictionary.rs</code>.</li>
         <li><code>cargo test</code> fails when the code and <code>tokens.json</code> disagree, or when this page leaves out a colour. Change both together.</li>
-        <li><code>gramly preview</code>: draws every card and the dictionary to PNG in both appearances, from the app's own code. This page is a close copy; the previews are the real thing.</li>
+        <li><code>squiggle preview</code>: draws every card and the dictionary to PNG in both appearances, from the app's own code. This page is a close copy; the previews are the real thing.</li>
         <li><code>DESIGN.md</code>: the short version, next to the code.</li>
       </ul>
     </section>
@@ -497,7 +497,7 @@
     document.querySelectorAll('.seg button[data-key]').forEach(function (b) {
       b.addEventListener('click', function () {
         root.dataset[b.dataset.key] = b.dataset.val;
-        if (b.dataset.key === 'appearance') { try { localStorage.setItem('gramly-ink-appearance', b.dataset.val); } catch (e) {} }
+        if (b.dataset.key === 'appearance') { try { localStorage.setItem('squiggle-ink-appearance', b.dataset.val); } catch (e) {} }
         sync();
       });
     });

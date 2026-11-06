@@ -35,7 +35,7 @@ const RESTORE_AFTER: Duration = Duration::from_millis(250);
 /// The pasteboard half of the paste fallback; see [`Paste`].
 pub struct Pasteboard;
 
-/// The user's pasteboard while Gramly's text is on it. Held until it is put
+/// The user's pasteboard while Squiggle's text is on it. Held until it is put
 /// back, so a second stage cannot save the first's text as the user's.
 static STAGED: Mutex<Option<Saved>> = Mutex::new(None);
 
@@ -87,7 +87,7 @@ pub fn undo() {
     command(KEY_Z);
 }
 
-/// Where keystrokes go instead of the app in front: `gramly lab` points
+/// Where keystrokes go instead of the app in front: `squiggle lab` points
 /// them at its own test window, so an audit never types into the user's
 /// apps. Zero, the default, is the app in front.
 static TARGET: AtomicI32 = AtomicI32::new(0);

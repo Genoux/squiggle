@@ -1,8 +1,8 @@
-//! Which model should check Gramly's text: every route in
+//! Which model should check Squiggle's text: every route in
 //! `bench/routes.json` against every case in `bench/cases.json`, through
 //! the same prompt, diff and protection the app uses.
 //!
-//!     cargo run --release -p gramly-core --example bench -- [--runs 3]
+//!     cargo run --release -p squiggle-core --example bench -- [--runs 3]
 //!         [--only haiku,gemini | --app] [--jobs 16] [--show haiku]
 //!
 //! Spends real money on the configured OpenRouter key: a few cents a run.
@@ -12,9 +12,9 @@
 //! research); a correction the user waits seconds for is not seen; and the
 //! same text should get the same answer every time.
 
-use gramly_core::router::Route;
-use gramly_core::{Config, Fix, ai, apply, diff, protect};
 use serde::Deserialize;
+use squiggle_core::router::Route;
+use squiggle_core::{Config, Fix, ai, apply, diff, protect};
 use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
@@ -69,7 +69,7 @@ fn main() -> anyhow::Result<()> {
         .collect();
     let key = Config::load()?
         .openrouter_key
-        .ok_or_else(|| anyhow::anyhow!("no OpenRouter key in the Gramly config"))?;
+        .ok_or_else(|| anyhow::anyhow!("no OpenRouter key in the Squiggle config"))?;
 
     // Every call, shuffled across routes so one slow host does not hold a
     // block of the others back.
@@ -259,9 +259,9 @@ fn score(
                     start: *start,
                     end: *end,
                     replacement: replacement.clone(),
-                    kind: gramly_core::Kind::Correctness,
+                    kind: squiggle_core::Kind::Correctness,
                     message: String::new(),
-                    source: gramly_core::Source::Ai,
+                    source: squiggle_core::Source::Ai,
                 })
                 .collect();
             let result = apply(&case.text, &fixes);

@@ -9,12 +9,12 @@ use ksni::menu::{CheckmarkItem, StandardItem, SubMenu};
 use ksni::{MenuItem, Tray};
 use std::sync::mpsc::Sender;
 
-pub struct GramlyTray {
+pub struct SquiggleTray {
     status: Status,
     commands: Sender<Command>,
 }
 
-type Action = Box<dyn Fn(&mut GramlyTray) + Send>;
+type Action = Box<dyn Fn(&mut SquiggleTray) + Send>;
 
 fn send(command: Command) -> Action {
     Box::new(move |tray| {
@@ -23,7 +23,7 @@ fn send(command: Command) -> Action {
     })
 }
 
-fn render(item: Item) -> MenuItem<GramlyTray> {
+fn render(item: Item) -> MenuItem<SquiggleTray> {
     match item {
         Item::Note(label) => StandardItem {
             label,
@@ -59,21 +59,21 @@ fn render(item: Item) -> MenuItem<GramlyTray> {
     }
 }
 
-impl GramlyTray {
+impl SquiggleTray {
     fn new(status: Status, commands: Sender<Command>) -> Self {
         Self { status, commands }
     }
 }
 
-impl Tray for GramlyTray {
+impl Tray for SquiggleTray {
     const MENU_ON_ACTIVATE: bool = true;
 
     fn id(&self) -> String {
-        "gramly".into()
+        "squiggle".into()
     }
 
     fn title(&self) -> String {
-        "Gramly".into()
+        "Squiggle".into()
     }
 
     fn icon_name(&self) -> String {
@@ -85,7 +85,7 @@ impl Tray for GramlyTray {
     }
 }
 
-pub struct TrayHandle(Handle<GramlyTray>);
+pub struct TrayHandle(Handle<SquiggleTray>);
 
 impl TrayHandle {
     pub fn show(&self, status: Status) {
@@ -93,11 +93,11 @@ impl TrayHandle {
     }
 }
 
-/// Spawned even when no tray host is up yet: at login Gramly can start
+/// Spawned even when no tray host is up yet: at login Squiggle can start
 /// before the shell, and the icon should appear when the host does rather
 /// than never.
 pub fn spawn(status: Status, commands: Sender<Command>) -> anyhow::Result<TrayHandle> {
-    let handle = GramlyTray::new(status, commands)
+    let handle = SquiggleTray::new(status, commands)
         .assume_sni_available(true)
         .spawn()?;
     Ok(TrayHandle(handle))
@@ -119,12 +119,12 @@ mod tests {
         }
     }
 
-    fn tray() -> (GramlyTray, mpsc::Receiver<Command>) {
+    fn tray() -> (SquiggleTray, mpsc::Receiver<Command>) {
         let (sender, commands) = mpsc::channel();
-        (GramlyTray::new(status(), sender), commands)
+        (SquiggleTray::new(status(), sender), commands)
     }
 
-    fn label(item: &MenuItem<GramlyTray>) -> Option<&str> {
+    fn label(item: &MenuItem<SquiggleTray>) -> Option<&str> {
         match item {
             MenuItem::Standard(item) => Some(&item.label),
             MenuItem::Checkmark(item) => Some(&item.label),
@@ -147,9 +147,9 @@ mod tests {
             shared.iter().map(|item| *item == Item::Separator).collect();
         assert_eq!(drawn_separators, shared_separators);
         let names: Vec<&str> = drawn.iter().filter_map(label).collect();
-        assert_eq!(names[0], concat!("Gramly ", env!("CARGO_PKG_VERSION")));
+        assert_eq!(names[0], concat!("Squiggle ", env!("CARGO_PKG_VERSION")));
         assert_eq!(names[1], "Pause");
-        assert_eq!(names.last(), Some(&"Quit Gramly"));
+        assert_eq!(names.last(), Some(&"Quit Squiggle"));
     }
 
     #[test]

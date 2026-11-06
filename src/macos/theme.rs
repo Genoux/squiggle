@@ -44,7 +44,7 @@ thread_local! {
         const { RefCell::new(Vec::new()) };
 }
 
-/// Gramly's font at `size`, or the system font if the bundled one failed to
+/// Squiggle's font at `size`, or the system font if the bundled one failed to
 /// load.
 pub fn font(size: f64, weight: Weight) -> Retained<NSFont> {
     let descriptor = DESCRIPTORS.with(|cache| {

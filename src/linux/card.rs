@@ -7,16 +7,16 @@ use super::overlay::{fill, rounded};
 use crate::surface::card::MENU;
 use crate::surface::theme::{self, Face, Palette, Rgba, Shadow, Shape};
 use crate::surface::{Action, Bit, Card, Rect};
-use gramly_core::Kind;
 use gtk::prelude::*;
 use gtk4 as gtk;
+use squiggle_core::Kind;
 use std::ops::Range;
 use std::rc::Rc;
 
 pub type OnAction = Rc<dyn Fn(Action, usize)>;
 
 /// A card ready to be shown: its widgets, its size in logical pixels, and
-/// its clickable rows for `GRAMLY_STATE`.
+/// its clickable rows for `SQUIGGLE_STATE`.
 pub struct Built {
     pub root: gtk::Box,
     pub rows: Vec<(Action, gtk::Widget)>,
@@ -84,25 +84,25 @@ fn cards_css(p: &Palette) -> String {
     let clear = theme::CLEAR.css();
     let side = theme::BUTTON_SIDE - theme::BUTTON_OUTLINE;
     format!(
-        "window.gramly {{ background: transparent; box-shadow: none; }}
-         .gramly-card {{ font-family: \"{family}\", sans-serif; background-color: {surface}; border: {edge}px solid {edge_color}; border-radius: {corner}px; box-shadow: {tight}, {soft}; }}
-         .gramly-dot {{ border-radius: {dot_radius}px; }}
-         .gramly-dot.gramly-mistake {{ background-color: {mistake}; }}
-         .gramly-dot.gramly-advice {{ background-color: {advice}; }}
-         .gramly-title {{ color: {text2}; {title} }}
-         .gramly-sentence {{ color: {text}; {sentence} line-height: {line_height}; }}
-         button.gramly-button {{ all: unset; border: {outline}px solid {clear}; border-radius: {control}px; padding: 0 {side}px; transition: background-color {hover}ms, border-color {hover}ms; }}
-         button.gramly-button label {{ color: {text}; {button} }}
-         button.gramly-main {{ background-color: {ink}; }}
-         button.gramly-main:hover {{ background-color: {ink_hover}; }}
-         button.gramly-main label {{ color: {on_ink}; {button_main} }}
-         button.gramly-plain {{ border-color: {line}; }}
-         button.gramly-plain:hover {{ background-color: {fill}; border-color: {clear}; }}
-         button.gramly-more, button.gramly-item {{ all: unset; border-radius: {control}px; transition: background-color {hover}ms; }}
-         button.gramly-more:hover, button.gramly-more.gramly-open, button.gramly-item:hover {{ background-color: {fill}; }}
-         button.gramly-item label {{ color: {text}; {button} }}
-         .gramly-menu {{ background-color: {surface}; border: {edge}px solid {edge_color}; border-radius: {corner}px; box-shadow: {tight}, {soft}; padding: {menu_pad}px; }}
-         .gramly-rule {{ background-color: {line}; }}",
+        "window.squiggle {{ background: transparent; box-shadow: none; }}
+         .squiggle-card {{ font-family: \"{family}\", sans-serif; background-color: {surface}; border: {edge}px solid {edge_color}; border-radius: {corner}px; box-shadow: {tight}, {soft}; }}
+         .squiggle-dot {{ border-radius: {dot_radius}px; }}
+         .squiggle-dot.squiggle-mistake {{ background-color: {mistake}; }}
+         .squiggle-dot.squiggle-advice {{ background-color: {advice}; }}
+         .squiggle-title {{ color: {text2}; {title} }}
+         .squiggle-sentence {{ color: {text}; {sentence} line-height: {line_height}; }}
+         button.squiggle-button {{ all: unset; border: {outline}px solid {clear}; border-radius: {control}px; padding: 0 {side}px; transition: background-color {hover}ms, border-color {hover}ms; }}
+         button.squiggle-button label {{ color: {text}; {button} }}
+         button.squiggle-main {{ background-color: {ink}; }}
+         button.squiggle-main:hover {{ background-color: {ink_hover}; }}
+         button.squiggle-main label {{ color: {on_ink}; {button_main} }}
+         button.squiggle-plain {{ border-color: {line}; }}
+         button.squiggle-plain:hover {{ background-color: {fill}; border-color: {clear}; }}
+         button.squiggle-more, button.squiggle-item {{ all: unset; border-radius: {control}px; transition: background-color {hover}ms; }}
+         button.squiggle-more:hover, button.squiggle-more.squiggle-open, button.squiggle-item:hover {{ background-color: {fill}; }}
+         button.squiggle-item label {{ color: {text}; {button} }}
+         .squiggle-menu {{ background-color: {surface}; border: {edge}px solid {edge_color}; border-radius: {corner}px; box-shadow: {tight}, {soft}; padding: {menu_pad}px; }}
+         .squiggle-rule {{ background-color: {line}; }}",
         family = theme::FONT_FAMILY,
         surface = p.surface.css(),
         edge = edge_width(),
@@ -213,7 +213,7 @@ fn sentence_view(bits: &[Bit], kind: Kind, p: &'static Palette) -> gtk::Grid {
     let (markup, news) = sentence_markup(bits, kind, p);
     let body = gtk::Label::new(None);
     body.set_markup(&markup);
-    body.add_css_class("gramly-sentence");
+    body.add_css_class("squiggle-sentence");
     body.set_xalign(0.0);
     body.set_valign(gtk::Align::Start);
     // Without it the grid's column is as narrow as that capped natural width,
@@ -258,21 +258,21 @@ fn sentence_view(bits: &[Bit], kind: Kind, p: &'static Palette) -> gtk::Grid {
 
 fn kind_class(kind: Kind) -> &'static str {
     match kind {
-        Kind::Spelling | Kind::Correctness => "gramly-mistake",
-        Kind::Clarity => "gramly-advice",
+        Kind::Spelling | Kind::Correctness => "squiggle-mistake",
+        Kind::Clarity => "squiggle-advice",
     }
 }
 
 /// The dot in the underline's colour, then the title.
 fn heading(card: &Card) -> gtk::Box {
     let dot = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-    dot.add_css_class("gramly-dot");
+    dot.add_css_class("squiggle-dot");
     dot.add_css_class(kind_class(card.kind));
     dot.set_size_request(theme::DOT as i32, theme::DOT as i32);
     dot.set_valign(gtk::Align::Center);
 
     let title = gtk::Label::new(Some(&card.title));
-    title.add_css_class("gramly-title");
+    title.add_css_class("squiggle-title");
     title.set_xalign(0.0);
     title.set_hexpand(true);
     title.set_margin_start((theme::TITLE_INDENT - theme::DOT) as i32);
@@ -311,11 +311,11 @@ fn button(action: Action, primary: bool, index: usize, on_action: &OnAction) -> 
     button.set_focus_on_click(false);
     button.set_height_request(theme::BUTTON_HEIGHT as i32);
     button.set_cursor_from_name(Some("pointer"));
-    button.add_css_class("gramly-button");
+    button.add_css_class("squiggle-button");
     button.add_css_class(if primary {
-        "gramly-main"
+        "squiggle-main"
     } else {
-        "gramly-plain"
+        "squiggle-plain"
     });
     let on_action = Rc::clone(on_action);
     button.connect_clicked(move |_| on_action(action, index));
@@ -388,7 +388,7 @@ fn plain(button: &gtk::Button, class: &str, action: Action, index: usize, on_act
 /// The ⋯ at the title's end, laid over the card.
 fn more(index: usize, on_action: &OnAction, p: &Palette) -> gtk::Button {
     let button = gtk::Button::new();
-    plain(&button, "gramly-more", Action::More, index, on_action);
+    plain(&button, "squiggle-more", Action::More, index, on_action);
     button.set_size_request(theme::MORE as i32, theme::MORE as i32);
     button.set_halign(gtk::Align::End);
     button.set_valign(gtk::Align::Start);
@@ -410,7 +410,7 @@ fn menu(index: usize, on_action: &OnAction, p: &Palette) -> (gtk::Box, Vec<(Acti
         h: 0.0,
     });
     let menu = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    menu.add_css_class("gramly-menu");
+    menu.add_css_class("squiggle-menu");
     menu.set_visible(false);
     menu.set_halign(gtk::Align::End);
     menu.set_valign(gtk::Align::Start);
@@ -422,7 +422,7 @@ fn menu(index: usize, on_action: &OnAction, p: &Palette) -> (gtk::Box, Vec<(Acti
     for (i, action) in MENU.into_iter().enumerate() {
         if i > 0 {
             let rule = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-            rule.add_css_class("gramly-rule");
+            rule.add_css_class("squiggle-rule");
             rule.set_height_request(1);
             let space = ((theme::MENU_RULE - 1.0) / 2.0) as i32;
             rule.set_margin_top(space);
@@ -432,7 +432,7 @@ fn menu(index: usize, on_action: &OnAction, p: &Palette) -> (gtk::Box, Vec<(Acti
             menu.append(&rule);
         }
         let item = gtk::Button::new();
-        plain(&item, "gramly-item", action, index, on_action);
+        plain(&item, "squiggle-item", action, index, on_action);
         item.set_height_request(theme::BUTTON_HEIGHT as i32);
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
         row.set_margin_start((theme::BUTTON_SIDE - 2.0) as i32);
@@ -492,7 +492,7 @@ pub fn build(card: &Card, index: usize, on_action: &OnAction, p: &'static Palett
     layers.add_overlay(&menu);
 
     let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    root.add_css_class("gramly-card");
+    root.add_css_class("squiggle-card");
     root.append(&layers);
     // The shadow is the card's own, and falls in this margin of the surface.
     let (left, right, top, bottom) = theme::SHADE;

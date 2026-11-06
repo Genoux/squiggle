@@ -1,4 +1,4 @@
-//! `gramly preview [dir]`: every card and the dictionary drawn to PNG, in
+//! `squiggle preview [dir]`: every card and the dictionary drawn to PNG, in
 //! the light and dark appearances, without a field or a screen to take over.
 //! For changing how they look: the files are what the app draws, from the
 //! same code, in an off-screen window.
@@ -8,7 +8,6 @@ use crate::macos::overlay;
 use crate::macos::theme;
 use crate::surface::card;
 use anyhow::{Context, Result, anyhow};
-use gramly_core::{Fix, Kind, Source};
 use objc2::rc::Retained;
 use objc2::{AnyThread, MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{
@@ -22,6 +21,7 @@ use objc2_core_graphics::{
 };
 use objc2_foundation::{NSDictionary, NSObject};
 use objc2_quartz_core::CATransaction;
+use squiggle_core::{Fix, Kind, Source};
 use std::path::{Path, PathBuf};
 
 /// Pixels per point in the files.
@@ -203,7 +203,7 @@ pub fn run(args: &[String]) -> Result<()> {
                 "dictionary",
                 &[
                     "Fieldtrip",
-                    "Gramly",
+                    "Squiggle",
                     "Hyprland",
                     "inBeat",
                     "tmrw",

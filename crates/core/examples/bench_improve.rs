@@ -2,7 +2,7 @@
 //! through the app's own prompt and filters, on the app's route (or every
 //! route in `bench/routes.json` with `--all`).
 //!
-//!     cargo run --release -p gramly-core --example bench_improve -- [--runs 3]
+//!     cargo run --release -p squiggle-core --example bench_improve -- [--runs 3]
 //!         [--all | --only gemini] [--show]
 //!
 //! Spends real money on the configured OpenRouter key: about a cent a run.
@@ -13,9 +13,9 @@
 //! none; how often awkward text ("improve" cases) gets one; whether the
 //! same text gets the same answer every run; latency and cost.
 
-use gramly_core::router::Route;
-use gramly_core::{Config, apply, improve, protect};
 use serde::Deserialize;
+use squiggle_core::router::Route;
+use squiggle_core::{Config, apply, improve, protect};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
@@ -59,7 +59,7 @@ fn main() -> anyhow::Result<()> {
     };
     let key = Config::load()?
         .openrouter_key
-        .ok_or_else(|| anyhow::anyhow!("no OpenRouter key in the Gramly config"))?;
+        .ok_or_else(|| anyhow::anyhow!("no OpenRouter key in the Squiggle config"))?;
 
     let queue: Vec<(usize, usize)> = (0..routes.len())
         .flat_map(|r| (0..cases.len()).flat_map(move |c| std::iter::repeat_n((r, c), runs)))

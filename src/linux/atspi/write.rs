@@ -145,7 +145,7 @@ impl Field {
     }
 }
 
-/// The text between two app offsets, as Gramly counts it.
+/// The text between two app offsets, as Squiggle counts it.
 fn stripped(text: &TextProxyBlocking, from: i32, to: i32) -> Option<String> {
     Some(strip_padding(&text.get_text(from, to).ok()?).0)
 }

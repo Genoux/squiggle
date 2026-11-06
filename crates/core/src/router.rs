@@ -186,7 +186,7 @@ fn send(key: &str, path: &str, scratch: &Path, timeout: Duration) -> Result<serd
          request = \"POST\"\n\
          header = \"Content-Type: application/json\"\n\
          header = \"Authorization: Bearer {key}\"\n\
-         header = \"X-Title: Gramly\"\n\
+         header = \"X-Title: Squiggle\"\n\
          data-binary = \"@{}\"\n\
          max-time = {}\n\
          fail-with-body\n",
@@ -216,7 +216,7 @@ fn send(key: &str, path: &str, scratch: &Path, timeout: Duration) -> Result<serd
 fn scratch_file() -> PathBuf {
     static NEXT: AtomicU64 = AtomicU64::new(0);
     std::env::temp_dir().join(format!(
-        "gramly-{}-{}.json",
+        "squiggle-{}-{}.json",
         std::process::id(),
         NEXT.fetch_add(1, Ordering::Relaxed)
     ))

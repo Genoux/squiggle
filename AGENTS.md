@@ -1,14 +1,14 @@
 # AGENTS.md
 
-Notes on why parts of Gramly are built the way they are. Same rule as Flow's:
+Notes on why parts of Squiggle are built the way they are. Same rule as Flow's:
 record what was measured or debugged, and the mistake each decision guards.
 
-Gramly is a grammar checker that draws on top of other apps' text fields.
+Squiggle is a grammar checker that draws on top of other apps' text fields.
 macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
 
 ## Layout
 
-- `crates/core` (`gramly-core`) knows text and nothing about screens: Harper,
+- `crates/core` (`squiggle-core`) knows text and nothing about screens: Harper,
   the model, merging, config. CI tests it on Linux as well as macOS so no
   platform assumption creeps in before the Linux surface exists.
 - `src/surface` is everything between text and screen that is not a
@@ -21,7 +21,7 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
 - `src/macos` is the first platform: Accessibility in (`ax.rs`), panels out
   (`overlay.rs`, which flips to Cocoa's y-up at its own edge), the menu
   (`app.rs`), the OS handle (`host.rs`), the paste fallback (`paste.rs`),
-  the Ink palette's AppKit half and the font (`theme.rs`), and `gramly
+  the Ink palette's AppKit half and the font (`theme.rs`), and `squiggle
   preview` (`preview.rs`).
 - `src/linux` is the Hyprland surface: AT-SPI in (`atspi.rs`), Hyprland's
   IPC for where windows are (`hypr.rs`). Hyprland only: Wayland tells no
@@ -33,7 +33,7 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
   component, `tokens.json` holds the values for the code and for the Linux
   surface. It lives in the repo because the repo is private and the page must
   change with the code; tests fail when either disagrees with the code.
-- One binary. Flow splits daemon and console because iced brings wgpu; Gramly
+- One binary. Flow splits daemon and console because iced brings wgpu; Squiggle
   draws with AppKit directly and has no settings window yet. If one is added
   with iced, it goes in its own workspace root like Flow's console.
 
@@ -62,7 +62,7 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
   phrase that fits: asked only to correct, Haiku fixed "came we some
   restructure" to "came out of" one run in three; told that a wrong word
   is a slip for a word that looks like it, "with" in every run. Measured
-  three runs each over a dozen real messages with `gramly check`, which
+  three runs each over a dozen real messages with `squiggle check`, which
   prints what the app draws (the model's fixes, protected text removed).
   The prompt also names agreement after "there", a comma joining two
   sentences, and shorthand never expanded ("u", "ok"): each was a miss
@@ -131,7 +131,7 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
 - Pinned to `google/gemini-3.5-flash-lite` on `google-ai-studio`,
   reasoning low, fallbacks off, the same discipline as Flow's refiner: a
   reroute is a different machine. Chosen by the benchmark
-  (`cargo run --release -p gramly-core --example bench`): every route in
+  (`cargo run --release -p squiggle-core --example bench`): every route in
   `crates/core/bench/routes.json` against the cases in `bench/cases.json`,
   through the app's own prompt, diff and protection, scored on F0.5 (a
   wrong suggestion costs more trust than a missed one), exact results,
@@ -190,7 +190,7 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
   spaces and invisible characters is blank (`protect::blank`) and is not
   sent to the model. The first fix only covered a zero-width space alone,
   guessed from a screenshot, and missed this; read the field's real text
-  (with `\u{..}` escapes) before writing the rule. `gramly check` asks a
+  (with `\u{..}` escapes) before writing the rule. `squiggle check` asks a
   paragraph at a time, as the app does: whole, Coda's text came back
   without its blank lines and showed nothing.
 - The dictionary binds both passes. Harper is given the words; the model
@@ -226,28 +226,28 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
   model, then said "on this Mac only" or "AI unavailable", then just
   "Checking as you type", which told nothing: running is on, quitting is
   off. Why a model call failed is in the log. It is ordered as most menu
-  bar apps are: name and version, what Gramly is doing, settings, then
+  bar apps are: name and version, what Squiggle is doing, settings, then
   the log and Quit. Pausing is a "Pause ▸" submenu (30 minutes, 1 hour,
   3 hours, until tomorrow), as Slack and Dropbox offer it: a lone "Pause
   for an hour" read oddly. Paused, the menu says "Paused until 15:40" and
   offers Resume in its place. Without Accessibility, "Grant Accessibility
   access…" comes first after the name. A pause lives in memory only, so
   a restart is a fresh start; an `enabled` line in an old config is
-  ignored, so it cannot leave Gramly off with no switch.
+  ignored, so it cannot leave Squiggle off with no switch.
 - One status does show: "AI suggestions stopped: add OpenRouter credits…"
   (or "check your OpenRouter key…"), under the name, while the model
   refuses for a reason only the writer can end (`router::blocked`: a 402
   or a 401). The key ran out of credits and the log was the only place
   that said so; underlines just stopped. The network or a busy provider
   passes on its own and shows nothing.
-- Gramly is turned off per field, from the card, as in Grammarly: the ⋯
+- Squiggle is turned off per field, from the card, as in Grammarly: the ⋯
   at the title's end opens "Don't suggest in this field" and the hour's
   pause. A per-app "Turn off in <app>" in the menu came first and was
   taken out; an `off_in` line in an old config is read and ignored. A
   field is known (`off::Place`) by its app, the page's host for a web
   field, its id and its first label; the id or the label is enough,
   since a page may make up ids per load. Those are saved to `off.txt`; a
-  field with neither is kept off by its element until Gramly quits. The
+  field with neither is kept off by its element until Squiggle quits. The
   menu's "Off in N fields" lists them to turn back on, and is hidden
   when there are none. The ⋯'s menu is drawn in the card's look, not a
   system menu, from the same items (`card::MENU`), icons
@@ -267,7 +267,7 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
   checks the text ends exactly as corrected, nothing outside a fix moves,
   and each underline left still sits on its words. Lists, emoji, French
   and neighbouring fixes all pass; the logic was never the problem.
-- `gramly lab` audits the part that was: writing into real fields. A
+- `squiggle lab` audits the part that was: writing into real fields. A
   second process (`lab-host`) opens a window off screen with an AppKit
   text field, text views (one a TextEdit-style bulleted list) and a web
   page (plain, a list, an inline chip, a textarea). The lab finds each
@@ -303,8 +303,8 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
 - A case that errors counts against the run. The first sandbox run passed
   while WebKit had dropped its tree mid-run and most web cases never ran;
   the lab now looks for a field for 5s and reports what could not run.
-- `gramly lab --e2e` runs a copy of the app itself (the installed one is
-  stopped and restarted) with `GRAMLY_STATE` set, so it writes what it
+- `squiggle lab --e2e` runs a copy of the app itself (the installed one is
+  stopped and restarted) with `SQUIGGLE_STATE` set, so it writes what it
   draws: each fix, its underline, the card's buttons. The lab loads text
   into a browser tab, checks each underline against the page's own word
   rectangle, moves the real pointer to open the card, clicks Accept, checks
@@ -323,7 +323,7 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
 ## Linux surface
 
 - Measured on Hyprland 0.56 against GTK4, Chrome, Electron and Zen, with
-  `gramly doctor --raw` and screenshots of the real screen.
+  `squiggle doctor --raw` and screenshots of the real screen.
 - Apps join the accessibility bus only once `org.a11y.Status.IsEnabled`
   is true. GTK, Qt and Gecko notice at once; Chromium and Electron join
   but build no tree below the window unless started with
@@ -342,11 +342,11 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
   union of its first and last characters' boxes.
 - Focus comes from `object:state-changed:focused` events. A walk of the
   tree per tick is out: a Zen window with 3086 nodes took 0.44s. The walk
-  remains for a field already focused before Gramly was listening.
+  remains for a field already focused before Squiggle was listening.
 - An event that names no text field is not trusted to mean "no field":
   Zen reports a childless panel of its window as focused each time the
   window comes forward, and nothing for the field still focused in the
-  page. Taken as a control, no field was looked for, and Gramly showed
+  page. Taken as a control, no field was looked for, and Squiggle showed
   nothing in Zen while saying it ran. The app is asked once, through
   `Collection`, for its focused editable text (5-8ms in Zen, through two
   nested iframes); the walk asks the same first, since a Zen with many
@@ -390,7 +390,7 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
   type refuses the fix - a clipboard restored without a type is not the
   user's - and nothing is selected; an empty clipboard is fine, restore
   clears. The restore waits 250ms on a thread and puts the clipboard back
-  only if it is still Gramly's offer (only the types it offered, holding its
+  only if it is still Squiggle's offer (only the types it offered, holding its
   text); one the user copied to meanwhile stays. One paste at a time.
   A fix that only removes text is not pasted: Zen ignores a paste of empty
   text and left the word selected for the next keystroke to replace (Chrome
@@ -439,15 +439,15 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
   from the caret at 0, each with the clipboard back as it was; "Correct
   the sentence" with four fixes in all three; "café😀" through
   `InsertText` in GTK4.
-- Two layer surfaces on the overlay layer, `gramly-marks` and
-  `gramly-card`. The underline one covers only the field's area (anchored
+- Two layer surfaces on the overlay layer, `squiggle-marks` and
+  `squiggle-card`. The underline one covers only the field's area (anchored
   top-left, margins and size), shrinking to 1x1 with nothing to draw, so
   fullscreen video and games keep direct scanout; it takes no input (an
   empty input region) and is never unmapped once shown: mapping a layer
   surface again puts it on top, over the card. The card is mapped and
   unmapped, so it lands on top each time, and wants no keyboard, so a
   click on it leaves the field focused.
-- Gramly's stylesheet sits one above the user's (`PRIORITY_USER + 1`). A
+- Squiggle's stylesheet sits one above the user's (`PRIORITY_USER + 1`). A
   matugen theme in `~/.config/gtk-4.0/gtk.css` painted every window, the
   whole-screen underline layer included, a near-opaque grey, and
   restyled the card's buttons.
@@ -458,14 +458,14 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
   of window or focus. On the main loop, repeated each second, a Zen window
   with no text field focused (2187 nodes, 0.3s a walk) held the loop up a
   third of the time.
-- Layer surfaces would fade in and out; Gramly sends Hyprland a layer rule
-  for the `gramly` namespaces with `no_anim` when it starts, over the
+- Layer surfaces would fade in and out; Squiggle sends Hyprland a layer rule
+  for the `squiggle` namespaces with `no_anim` when it starts, over the
   socket (`dispatch function() hl.layer_rule({...}) end`).
 - The tray is StatusNotifierItem through `ksni` (async-io, blocking API;
   no tokio). It serves D-Bus on its own thread, so a click only sends a
   `Command` down a channel that the 50ms tick drains and applies on the GTK
   thread; the tick pushes `Status` to the tray only when it changed. Spawned
-  with `assume_sni_available`: at login Gramly can start before the shell
+  with `assume_sni_available`: at login Squiggle can start before the shell
   has a tray host, and the icon should appear when the host does. The
   tray only draws `surface::menu` (checkmarks, no radio group, for the
   spelling choices).
@@ -477,7 +477,7 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
 - The systemd user unit sets no environment. It needs `WAYLAND_DISPLAY` and
   `HYPRLAND_INSTANCE_SIGNATURE` in the user manager, which uwsm provides;
   the installer checks `show-environment` and imports them if missing.
-  stderr is appended to `$XDG_STATE_HOME/gramly/gramly.log` (`%S`), the
+  stderr is appended to `$XDG_STATE_HOME/squiggle/squiggle.log` (`%S`), the
   path "Copy recent log" reads.
 - "Personal dictionary…" opens the dictionary window (`dictionary.rs`):
   a field with Add (Enter too) and the list with a remove button on each
@@ -490,10 +490,10 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
   Escape, as on the Mac. One at a time: a second click presents it, with
   the file read again. Hyprland would tile it, so a window rule floats and
   centres it, sent over the socket at startup beside the layer rule and
-  matched by title (`Gramly dictionary`), not class: GTK takes the class
+  matched by title (`Squiggle dictionary`), not class: GTK takes the class
   from the program, shared with the key window. Reading, adding (trim, no
   whitespace inside, no duplicate in any case), removing and the order are
-  `gramly_core::config`, shared with macOS, as are its words
+  `squiggle_core::config`, shared with macOS, as are its words
   (`surface::dictionary`). An add or remove asks the engine to check again
   at once; the worker reads the file per check, so nothing caches the old
   list. A word added from a card while the window is open shows only on the
@@ -506,7 +506,7 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
   and per element, several Electron apps never send `AXValueChanged`, and
   observers must be re-registered whenever focus moves.
 - Every AX call is IPC into another app; a 150ms messaging timeout keeps a
-  hung app from hanging Gramly.
+  hung app from hanging Squiggle.
 - The card is one window level above the underlines. Never call
   `setFloatingPanel` on these panels: it resets the level, which put every
   panel on one level and drew underlines over the card.
@@ -531,7 +531,7 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
   field is dropped only after `GRACE` (8) misses in a row, and a withdrawn
   card stays as `ORPHAN` - accepting still works from `card_fix`, but only
   while its range still reads the words the card showed (`card_words`;
-  "the card's words moved") - until the pointer leaves. Abnormal closes are logged; `GRAMLY_TRACE=1` logs all.
+  "the card's words moved") - until the pointer leaves. Abnormal closes are logged; `SQUIGGLE_TRACE=1` logs all.
 - Only a non-answer waits out `GRACE`. Focus answered as being elsewhere
   (`Focus::Elsewhere`), or another app coming forward, drops the field at
   once: read as misses, a switch to another window left the underlines over
@@ -546,14 +546,14 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
 - Every app is sent `AXManualAccessibility = true` once when it first comes
   forward (`ax::wake`). Electron and Chromium build no accessibility tree
   without it, which is how Grammarly works in a Claude or Slack text box
-  where Gramly showed nothing. Once is not enough: Slack, woken at 07:48,
+  where Squiggle showed nothing. Once is not enough: Slack, woken at 07:48,
   worked until mid-morning and then answered "no focused element" with
   its message box focused, so nothing was checked and nothing was logged;
   asked again, it answered at once. The front app is asked again whenever
   its focus reads as no text field, at most every 5s (`REWAKE`). Gecko browsers (Zen, Firefox) answer that attribute as unsupported and
   are sent `AXEnhancedUserInterface` instead, the one VoiceOver sets: Zen's
   tree fell to its window's three buttons, with the window reported as
-  focused, until it was set (6 nodes to 416). Gramly had worked in Zen only
+  focused, until it was set (6 nodes to 416). Squiggle had worked in Zen only
   while another app kept it set. Other apps are not sent it, since it
   slows their window animations.
 - Chromium text areas (the ChatGPT/Codex app, and likely every Electron
@@ -562,7 +562,7 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
   `Field::bounds` falls back to those: children are matched to the field's
   value in order by their own text, then asked for the local range. Text
   markers (`AXBoundsForTextMarkerRange`) were tried first and returned the
-  whole window. `gramly doctor --raw` prints the tree when an app misbehaves.
+  whole window. `squiggle doctor --raw` prints the tree when an app misbehaves.
 - The underline panel ignores the mouse, so clicks reach the text. Hover is
   detected by polling the pointer position against the word rectangles.
 - Writing a fix: select the range, set `AXSelectedText`, then **read the value
@@ -636,13 +636,13 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
 - A field whose text is its own placeholder, description or title is read as
   empty (`Field::value`). Web composers draw the placeholder as text:
   ChatGPT's empty box in Zen reads "Ask ChatGPT\n" with no
-  `AXPlaceholderValue`, the same words in `AXDescription`, and Gramly
+  `AXPlaceholderValue`, the same words in `AXDescription`, and Squiggle
   underlined it. The labels are read once per field, not every poll.
 - Terminals are skipped by bundle id, password fields by role. Both are
   deliberate and both are what Grammarly does.
 - The Accessibility grant is tied to the signature's designated requirement.
   Ad hoc, that requirement is the build's hash, so every install lost the
-  grant. Install now signs with a "Gramly Local Signing" certificate it makes
+  grant. Install now signs with a "Squiggle Local Signing" certificate it makes
   once in the login keychain; the requirement names the certificate and the
   grant survives rebuilds.
 - Nothing animates by itself. Core Animation's implicit actions drew every
@@ -654,7 +654,7 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
   every keystroke, which flickered: a fix the edit touched is dropped, the
   rest shift. Letters typed onto a word's edge count as touching it; a space
   or punctuation does not.
-- A dismissal lasts until Gramly quits, across fields and apps. It was
+- A dismissal lasts until Squiggle quits, across fields and apps. It was
   cleared whenever focus moved, as Grammarly's per-field dismissals are,
   and a user dismissed a fix, looked at another window, and found it back.
   It is keyed by the three words before the fix on its line plus the
@@ -699,12 +699,12 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
   (`assets/fonts`, SIL Open Font License) and loaded from its bytes: a
   release is one file, and a bundled font looks the same on every machine.
   Its I, l and 1 differ, which matters when the fix is a capital I. On Linux
-  the same bytes are written under `$XDG_RUNTIME_DIR/gramly/fonts` at start
+  the same bytes are written under `$XDG_RUNTIME_DIR/squiggle/fonts` at start
   and handed to fontconfig as application fonts (`font.rs`) before GTK
   starts, so nothing is installed and uninstall leaves nothing: an install
   script copying them would have needed the files beside the binary in a
   release. The stylesheet names the system sans after it.
-- The card's shadow is Gramly's, in a panel of its own that ignores the
+- The card's shadow is Squiggle's, in a panel of its own that ignores the
   mouse (`shade`). The system's shadow would differ on Linux, and drawn in
   the card's own panel, its pixels would take clicks meant for the text below
   the card. On Linux it is CSS `box-shadow` on the card, falling inside a
@@ -726,7 +726,7 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
   underline) shipped in 0.2.0 and was taken out: the name will change, and
   an alpha needs no brand. A Linux tray takes the icon theme's
   `tools-check-spelling`.
-- `gramly preview [dir]` draws every card and the dictionary to PNG in both
+- `squiggle preview [dir]` draws every card and the dictionary to PNG in both
   appearances, from the same code, in an off-screen window. Look at it
   before and after changing how they are drawn.
 
@@ -735,6 +735,14 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
 - The git history carries no agent attribution: no `Co-authored-by:` trailers,
   no tool signatures in messages, no agent branches. Agent tooling directories
   stay untracked. Same rule as Flow.
+- Squiggle was called Gramly before 1.0. The only places the old name is
+  left on purpose: `config::adopt_old_dir`, which moves `~/.config/gramly`
+  to `~/.config/squiggle` on first start so settings, the dictionary and
+  fields turned off survive the update; the installer, which removes the
+  old LaunchAgent and `Gramly.app` (or `gramly.service` and its binary)
+  so two apps do not draw two sets of underlines; and the GitHub URL until
+  the repository is renamed. The new bundle id means macOS asks for
+  Accessibility again once.
 - main only moves through pull requests. GitHub refuses a direct push to
   it, admins included (branch protection), and a pull request merges only
   once CI's `macos` and `linux` jobs pass on it, up to date with main.

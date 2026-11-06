@@ -1,6 +1,6 @@
 # Design
 
-Gramly's look is called Ink. It draws on top of other people's apps, so it
+Squiggle's look is called Ink. It draws on top of other people's apps, so it
 stays quiet: neutral surfaces, one ink colour for the main action, and colour
 only where it means something - the underline, the words a fix takes out
 (red) and puts in (green). Nothing in it belongs to macOS - no vibrancy,
@@ -9,7 +9,7 @@ system accent or SF font - so the Linux surface draws the same thing.
 The design system is `design/index.html`: every token and component, in both
 appearances. Its values are `design/tokens.json`, which `cargo test` checks
 against `src/macos/theme.rs`, `overlay.rs` and `dictionary.rs`, and against the
-page itself. `gramly preview` draws every card and the dictionary from the
+page itself. `squiggle preview` draws every card and the dictionary from the
 app's own code.
 
 ## Colour
@@ -60,7 +60,7 @@ title; the sentence with the change in place, struck in red for what goes
 and bold green on a fill for what comes; then a row of buttons.
 
 - 340 wide, 16 padding. A hairline edge and a two-layer shadow drawn by
-  Gramly, not the system.
+  Squiggle, not the system.
 - 10 between the title and the sentence, 16 above the buttons, 8 between
   buttons.
 - Every button is 32 high, 12 at the sides. The main one is solid ink; the
@@ -74,4 +74,4 @@ and bold green on a fill for what comes; then a row of buttons.
 ## The menu bar
 
 The system's spell-check symbol, not a logo: the name will change before
-Gramly has a mark. A Linux tray takes the icon theme's `tools-check-spelling`.
+Squiggle has a mark. A Linux tray takes the icon theme's `tools-check-spelling`.

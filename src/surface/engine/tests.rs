@@ -1,7 +1,7 @@
 use super::*;
 use crate::surface::write::{Paste, Refusal};
 use crate::surface::{Bit, Card, Point, Write};
-use gramly_core::Source;
+use squiggle_core::Source;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
@@ -465,7 +465,7 @@ fn a_field_turned_off_from_the_card_is_saved_and_shows_nothing() {
 }
 
 #[test]
-fn a_field_with_nothing_to_know_it_by_is_off_until_gramly_quits() {
+fn a_field_with_nothing_to_know_it_by_is_off_until_squiggle_quits() {
     let mut rig = rig_labelled(local_only(), true, "");
     rig.engine.act(Action::OffHere, 0);
     assert!(rig.saved_off.borrow().is_empty(), "not saved");
@@ -672,7 +672,7 @@ fn harper_is_drawn_when_the_model_has_failed() {
 
 #[test]
 fn adding_a_word_to_the_dictionary_checks_the_text_again() {
-    let config_home = std::env::temp_dir().join(format!("gramly-engine-{}", std::process::id()));
+    let config_home = std::env::temp_dir().join(format!("squiggle-engine-{}", std::process::id()));
     // The dictionary is a file under the config directory; a test must not
     // write into the real one. Set before any engine thread reads it.
     static ISOLATE: std::sync::Once = std::sync::Once::new();

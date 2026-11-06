@@ -1,7 +1,7 @@
 //! What a suggestion card says, as data. Each platform decides how it looks.
 
-use gramly_core::diff::{Piece, pieces};
-use gramly_core::{Fix, Kind, Source, improve};
+use squiggle_core::diff::{Piece, pieces};
+use squiggle_core::{Fix, Kind, Source, improve};
 
 /// What clicking a button of the card does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -35,7 +35,7 @@ impl Action {
         }
     }
 
-    /// The name `GRAMLY_STATE` carries, which `gramly lab --e2e` reads.
+    /// The name `SQUIGGLE_STATE` carries, which `squiggle lab --e2e` reads.
     pub fn name(self) -> &'static str {
         match self {
             Action::Accept => "accept:",
@@ -154,7 +154,7 @@ fn snippet(text: &str, fixes: &[&Fix]) -> Vec<Bit> {
         return Vec::new();
     };
     let last = fixes.iter().map(|f| f.end).max().unwrap_or(first);
-    let (from, to) = gramly_core::sentence(text, first);
+    let (from, to) = squiggle_core::sentence(text, first);
     let (from, to) = (from.min(first), to.max(last).min(chars.len()));
 
     let mut out = vec![Bit::Same(lead(&chars[from..first]))];
@@ -179,7 +179,7 @@ fn snippet(text: &str, fixes: &[&Fix]) -> Vec<Bit> {
     // editor's inline objects drew as boxed "OBJ" in the card's font.
     let shown = |s: String| -> String {
         s.chars()
-            .filter(|c| !gramly_core::protect::invisible(*c))
+            .filter(|c| !squiggle_core::protect::invisible(*c))
             .map(|c| if c == '\n' { ' ' } else { c })
             .collect()
     };

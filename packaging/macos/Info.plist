@@ -3,13 +3,13 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleIdentifier</key>
-	<string>dev.genoux.gramly</string>
+	<string>dev.genoux.squiggle</string>
 	<key>CFBundleName</key>
-	<string>Gramly</string>
+	<string>Squiggle</string>
 	<key>CFBundleDisplayName</key>
-	<string>Gramly</string>
+	<string>Squiggle</string>
 	<key>CFBundleExecutable</key>
-	<string>gramly</string>
+	<string>squiggle</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>

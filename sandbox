@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Everything that says whether Gramly is ready to release, in one run, with
+# Everything that says whether Squiggle is ready to release, in one run, with
 # a report and a comparison against the run before.
 #
 #   ./sandbox            free, and never touches the screen: format, lint,
@@ -53,7 +53,7 @@ step() {
 }
 
 key() {
-  sed -n 's/^openrouter_key *= *"\{0,1\}\([^"]*\)"\{0,1\} *$/\1/p' "$HOME/.config/gramly/config.toml" 2>/dev/null
+  sed -n 's/^openrouter_key *= *"\{0,1\}\([^"]*\)"\{0,1\} *$/\1/p' "$HOME/.config/squiggle/config.toml" 2>/dev/null
 }
 
 step build   cargo build --workspace --all-targets
@@ -64,12 +64,12 @@ step lab     cargo run -q -- lab && cp target/lab/last.json "$out/lab.json"
 
 if [ $ai = 1 ]; then
   if [ -z "$(key)" ]; then
-    echo "bench      skipped: no OpenRouter key in ~/.config/gramly/config.toml"
+    echo "bench      skipped: no OpenRouter key in ~/.config/squiggle/config.toml"
   else
-    step bench cargo run --release -q -p gramly-core --example bench -- --app --runs 3 \
+    step bench cargo run --release -q -p squiggle-core --example bench -- --app --runs 3 \
       && cp target/bench/last.json "$out/bench.json"
     if [ $models = 1 ]; then
-      step models cargo run --release -q -p gramly-core --example bench -- --runs 2 \
+      step models cargo run --release -q -p squiggle-core --example bench -- --runs 2 \
         && cp target/bench/last.json "$out/models.json"
     fi
   fi
@@ -104,7 +104,7 @@ with open(os.path.join(out, "steps.tsv")) as f:
         steps.append((name, int(status), int(seconds)))
 
 failures = []
-lines = ["# Gramly sandbox", "", f"Run `{os.path.basename(out)}`" +
+lines = ["# Squiggle sandbox", "", f"Run `{os.path.basename(out)}`" +
          (f", compared with `{os.path.basename(previous)}`." if previous else ", the first one."), ""]
 
 lines += ["## Steps", "", "| step | result | time |", "|---|---|---|"]

@@ -5,7 +5,7 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 use wl_clipboard_rs::copy::{self, MimeType, Options, Source};
 
-/// Where the systemd unit appends stderr: `%S/gramly/gramly.log`, which
+/// Where the systemd unit appends stderr: `%S/squiggle/squiggle.log`, which
 /// systemd resolves the same way for a user manager.
 pub fn log_path() -> PathBuf {
     log_path_in(std::env::var_os("XDG_STATE_HOME"), std::env::var_os("HOME"))
@@ -16,7 +16,7 @@ fn log_path_in(state_home: Option<OsString>, home: Option<OsString>) -> PathBuf 
         .filter(|dir| !dir.is_empty())
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(home.unwrap_or_default()).join(".local/state"));
-    state.join("gramly/gramly.log")
+    state.join("squiggle/squiggle.log")
 }
 
 pub fn copy_recent_log() {
@@ -41,7 +41,7 @@ mod tests {
     fn the_log_follows_xdg_state_home() {
         assert_eq!(
             log_path_in(Some("/state".into()), Some("/home/u".into())),
-            PathBuf::from("/state/gramly/gramly.log")
+            PathBuf::from("/state/squiggle/squiggle.log")
         );
     }
 
@@ -50,7 +50,7 @@ mod tests {
         for empty in [None, Some(OsString::new())] {
             assert_eq!(
                 log_path_in(empty, Some("/home/u".into())),
-                PathBuf::from("/home/u/.local/state/gramly/gramly.log")
+                PathBuf::from("/home/u/.local/state/squiggle/squiggle.log")
             );
         }
     }

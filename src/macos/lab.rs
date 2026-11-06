@@ -1,7 +1,7 @@
-//! `gramly lab`: an audit of what accepting a fix does to real text fields.
+//! `squiggle lab`: an audit of what accepting a fix does to real text fields.
 //!
-//! A second process (`gramly lab-host`) opens a window off screen holding
-//! the kinds of field Gramly meets: an AppKit text field and text views,
+//! A second process (`squiggle lab-host`) opens a window off screen holding
+//! the kinds of field Squiggle meets: an AppKit text field and text views,
 //! one with a bulleted list, and web text boxes (plain, a list, one with an
 //! inline chip like ChatGPT's, a textarea). The lab finds them through
 //! Accessibility, the way the app finds a focused field, and runs the app's
@@ -20,7 +20,6 @@ use crate::macos::paste;
 use crate::surface::Field as _;
 use crate::surface::write;
 use anyhow::{Context, Result, bail};
-use gramly_core::{Fix, Kind, Source};
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2::{MainThreadMarker, MainThreadOnly, sel};
@@ -33,6 +32,7 @@ use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 use objc2_foundation::{NSDate, NSDefaultRunLoopMode, NSError, NSRange, NSString};
 use objc2_web_kit::{WKWebView, WKWebViewConfiguration};
 use serde_json::{Value, json};
+use squiggle_core::{Fix, Kind, Source};
 use std::cell::RefCell;
 use std::io::{BufRead, BufReader, Write as _};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
@@ -623,13 +623,13 @@ const BROWSERS: &[(&str, &str, &str)] = &[
     ("firefox", "Firefox", "org.mozilla.firefox"),
 ];
 
-const TITLE: &str = "Gramly lab";
+const TITLE: &str = "Squiggle lab";
 
 /// The page talks to the lab over plain HTTP on 127.0.0.1: it asks for the
 /// next request, runs it, and posts the answer back. Any browser can run
 /// that, and it gives the lab the DOM's own account of every field.
 const BRIDGE: &str = r#"<script>
-document.title='Gramly lab';
+document.title='Squiggle lab';
 function run(c){
   if(c.cmd==='ping')return {ok:true};
   if(c.cmd==='load'){load(c.field,c.text);focusOn(c.field);return {ok:true}}
@@ -641,7 +641,7 @@ function run(c){
     return {word:w==='null'?null:JSON.parse(w),field:{x:f.x,y:f.y,w:f.width,h:f.height}}}
   if(c.cmd==='sel'){const s=getSelection();const d=n=>n?(n.nodeType===3?JSON.stringify(n.data):n.nodeName+'['+n.childNodes.length+']'):'-';
     return {text:JSON.stringify(s.toString()),anchor:d(s.anchorNode)+'@'+s.anchorOffset,focus:d(s.focusNode)+'@'+s.focusOffset}}
-  if(c.cmd==='done'){document.body.innerHTML='<p style="font:16px -apple-system;margin:40px">Gramly lab finished. You can close this tab.</p>';return {ok:true}}
+  if(c.cmd==='done'){document.body.innerHTML='<p style="font:16px -apple-system;margin:40px">Squiggle lab finished. You can close this tab.</p>';return {ok:true}}
   return {error:'unknown '+c.cmd}}
 (async function(){for(;;){try{
   const r=await fetch('/next',{cache:'no-store'});
@@ -832,9 +832,9 @@ impl Surface for Browser {
 enum Result_ {
     /// The field holds exactly what it should.
     Exact,
-    /// Gramly refused to write, and why. Safe, but the fix did nothing.
+    /// Squiggle refused to write, and why. Safe, but the fix did nothing.
     Refused(String),
-    /// Gramly wrote, and the field never changed: the click did nothing.
+    /// Squiggle wrote, and the field never changed: the click did nothing.
     Lost,
     /// The field holds something else: the failure that matters.
     Wrong { got: String, want: String },
@@ -1013,10 +1013,10 @@ pub fn run(args: &[String]) -> Result<()> {
     std::fs::write(&path, serde_json::to_string_pretty(&json!(report))?)?;
     println!(
         "\nplaced: underlines within 3pt of the word. exact: accepts that left exactly the\n\
-         corrected text. refused: Gramly wrote nothing (safe, but the fix did nothing).\n\
+         corrected text. refused: Squiggle wrote nothing (safe, but the fix did nothing).\n\
          shown: median time from the click until the field showed the fix.\n\
          ax lag: 90th percentile wait for Accessibility to report what the field shows.\n\
-         lost: Gramly wrote and the field never changed. WRONG: the field ended with\n\
+         lost: Squiggle wrote and the field never changed. WRONG: the field ended with\n\
          other text - the failure that must stay at 0.\n\
          Every accept is listed with --show. Report: {}",
         path.display()
@@ -1219,7 +1219,7 @@ fn audit(lab: &mut dyn Surface, id: &str, case: &Case, tally: &mut Tally) -> Res
         let Some(fix) = fix_at(&value, from, to, n) else {
             continue;
         };
-        let bounds = gramly_core::sentence(&value, fix.start);
+        let bounds = squiggle_core::sentence(&value, fix.start);
         match groups.iter_mut().find(|(b, _)| *b == bounds) {
             Some((_, group)) => group.push((fix, from, n)),
             None => groups.push((bounds, vec![(fix, from, n)])),
@@ -1368,7 +1368,7 @@ const E2E: &[(&str, &str)] = &[
 ];
 
 /// The installed app, stopped while the lab runs its own copy and started
-/// again afterwards, however the run ends: two Gramlys draw two sets of
+/// again afterwards, however the run ends: two Squiggles draw two sets of
 /// underlines.
 struct Paused {
     agent: std::path::PathBuf,
@@ -1377,11 +1377,11 @@ struct Paused {
 impl Paused {
     fn new() -> Self {
         let agent = std::path::PathBuf::from(std::env::var_os("HOME").unwrap_or_default())
-            .join("Library/LaunchAgents/dev.genoux.gramly.plist");
+            .join("Library/LaunchAgents/dev.genoux.squiggle.plist");
         let _ = Command::new("launchctl")
             .args([
                 "bootout",
-                &format!("gui/{}/dev.genoux.gramly", unsafe { libc_getuid() }),
+                &format!("gui/{}/dev.genoux.squiggle", unsafe { libc_getuid() }),
             ])
             .status();
         Self { agent }
@@ -1485,7 +1485,7 @@ fn fix_of(value: &Value) -> Fix {
     }
 }
 
-/// `gramly lab --e2e`: the real app, in a browser test tab, driven with the
+/// `squiggle lab --e2e`: the real app, in a browser test tab, driven with the
 /// mouse like a user, with screenshots.
 pub fn e2e(args: &[String]) -> Result<()> {
     if !ax::trusted(false) {
@@ -1518,7 +1518,7 @@ pub fn e2e(args: &[String]) -> Result<()> {
     let _paused = Paused::new();
     let log = std::fs::File::create(lab_dir.join("e2e-app.log"))?;
     let mut app = Command::new(std::env::current_exe()?)
-        .env("GRAMLY_STATE", &state_path)
+        .env("SQUIGGLE_STATE", &state_path)
         .stdout(log.try_clone()?)
         .stderr(log)
         .spawn()?;
@@ -1668,7 +1668,7 @@ fn e2e_case(
     let sentence = accept["action"] == "acceptSentence:";
     let chosen = fix_of(&target);
     let accepted: Vec<Fix> = if sentence {
-        let bounds = gramly_core::sentence(&value, chosen.start);
+        let bounds = squiggle_core::sentence(&value, chosen.start);
         fixes_of(&card)
             .iter()
             .map(fix_of)
@@ -1677,7 +1677,7 @@ fn e2e_case(
     } else {
         vec![chosen]
     };
-    let want = gramly_core::apply(&value, &accepted);
+    let want = squiggle_core::apply(&value, &accepted);
     let before = plain(&tab.truth(id)?);
     let rect: Vec<f64> = accept["rect"]
         .as_array()
