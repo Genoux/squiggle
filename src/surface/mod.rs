@@ -12,8 +12,8 @@ pub mod menu;
 pub mod theme;
 pub mod write;
 
-use gramly_core::off::{self, Place};
-use gramly_core::{Config, Kind};
+use squiggle_core::off::{self, Place};
+use squiggle_core::{Config, Kind};
 use std::time::Instant;
 
 pub use card::{Action, Bit, Card};
@@ -38,7 +38,7 @@ pub enum Write {
 /// A text field in another app. Offsets are `char`s, as Harper reports them;
 /// each platform converts to whatever its accessibility API counts.
 pub trait Field: PartialEq {
-    /// The element alone, to know a field again while Gramly runs: one
+    /// The element alone, to know a field again while Squiggle runs: one
     /// with no id or label is kept off this way; see [`Place`].
     type Handle: PartialEq;
     fn handle(&self) -> Self::Handle;
@@ -75,7 +75,7 @@ pub enum Focus<F> {
     /// Another editable text field.
     Field(F),
     /// An answer that it is not one: another control, a terminal, a password
-    /// field, Gramly's own window, another app in front. The field is given
+    /// field, Squiggle's own window, another app in front. The field is given
     /// up at once.
     Elsewhere,
     /// No answer: the app is busy or has just come forward. Not proof that
@@ -89,7 +89,7 @@ pub trait Host {
     /// Read every tick, so a setting applies on the next pause.
     fn config(&self) -> Config;
     fn trusted(&self) -> bool;
-    /// The app in front as (id, name), for the log; `None` while Gramly
+    /// The app in front as (id, name), for the log; `None` while Squiggle
     /// itself is.
     fn front(&self) -> Option<(String, String)>;
     /// The fields turned off from a card, as saved; see [`off`].
@@ -134,7 +134,7 @@ pub trait Overlay {
     fn hide_card(&mut self);
     /// The card's frame while it is on screen.
     fn card_frame(&self) -> Option<Rect>;
-    /// The card's rows as (action, frame on screen), for `GRAMLY_STATE`.
+    /// The card's rows as (action, frame on screen), for `SQUIGGLE_STATE`.
     fn card_rows(&self) -> Vec<(Action, Rect)>;
     /// Lights the row under the pointer.
     fn hover(&mut self, pointer: Point);
@@ -173,12 +173,12 @@ pub fn parse_key(input: &str) -> Result<Option<String>, &'static str> {
     let key = input.trim();
     match key {
         "" => Ok(None),
-        _ if gramly_core::router::valid_key(key) => Ok(Some(key.to_string())),
+        _ if squiggle_core::router::valid_key(key) => Ok(Some(key.to_string())),
         _ => Err(BAD_KEY),
     }
 }
 
-/// The settings lines `gramly doctor` opens with.
+/// The settings lines `squiggle doctor` opens with.
 pub fn config_lines(config: &Config) -> String {
     format!(
         "ai suggestions   {}\n",

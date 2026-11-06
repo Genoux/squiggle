@@ -1,4 +1,4 @@
-//! What Gramly draws on top of other apps: underlines and the suggestion
+//! What Squiggle draws on top of other apps: underlines and the suggestion
 //! card, as two wlr-layer-shell surfaces.
 //!
 //! The underlines' surface is mapped once and never unmapped: a layer
@@ -98,7 +98,7 @@ impl Surface {
     fn new(namespace: &str, edges: &[Edge]) -> Self {
         let window = gtk::Window::new();
         window.set_decorated(false);
-        window.add_css_class("gramly");
+        window.add_css_class("squiggle");
         window.init_layer_shell();
         window.set_namespace(Some(namespace));
         window.set_layer(Layer::Overlay);
@@ -245,7 +245,7 @@ impl LayerOverlay {
                 gtk::STYLE_PROVIDER_PRIORITY_USER + 1,
             );
         }
-        let underlines = Surface::new("gramly-marks", &[Edge::Left, Edge::Top]);
+        let underlines = Surface::new("squiggle-marks", &[Edge::Left, Edge::Top]);
         let painted = Rc::new(RefCell::new(Vec::new()));
         let canvas = gtk::DrawingArea::new();
         let shared = Rc::clone(&painted);
@@ -254,7 +254,7 @@ impl LayerOverlay {
         WidgetExt::realize(&underlines.window);
         click_through(&underlines.window);
         underlines.window.connect_map(click_through);
-        let card = Surface::new("gramly-card", &[Edge::Left, Edge::Top]);
+        let card = Surface::new("squiggle-card", &[Edge::Left, Edge::Top]);
         let card_area = Rc::new(Cell::new(cairo::RectangleInt::new(0, 0, 1, 1)));
         let area = Rc::clone(&card_area);
         card.window
@@ -407,9 +407,9 @@ impl surface::Overlay for LayerOverlay {
             let open = !shown.built.menu.is_visible();
             shown.built.menu.set_visible(open);
             if open {
-                shown.built.more.add_css_class("gramly-open");
+                shown.built.more.add_css_class("squiggle-open");
             } else {
-                shown.built.more.remove_css_class("gramly-open");
+                shown.built.more.remove_css_class("squiggle-open");
             }
         }
     }
@@ -457,7 +457,7 @@ impl surface::Overlay for LayerOverlay {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gramly_core::Kind;
+    use squiggle_core::Kind;
 
     fn monitor(name: &str, x: f64) -> Monitor {
         let frame = Rect {

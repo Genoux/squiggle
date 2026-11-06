@@ -40,7 +40,7 @@ const OFFERED: &[&str] = &[
 /// What the clipboard held: each type it offered, with its bytes.
 type Saved = Vec<(String, Vec<u8>)>;
 
-/// The user's clipboard, kept while Gramly's text is on it, and that text.
+/// The user's clipboard, kept while Squiggle's text is on it, and that text.
 struct Staged {
     saved: Saved,
     offered: String,
@@ -111,7 +111,7 @@ fn give_back_in(delay: Duration) {
     });
 }
 
-/// Restores only a clipboard that is still Gramly's offer. One the user has
+/// Restores only a clipboard that is still Squiggle's offer. One the user has
 /// copied to since is theirs and stays.
 fn give_back(ready: Staged) {
     match within(current) {
@@ -123,7 +123,7 @@ fn give_back(ready: Staged) {
     }
 }
 
-/// Whether the clipboard is the offer Gramly made: only the types it offers,
+/// Whether the clipboard is the offer Squiggle made: only the types it offers,
 /// holding its text.
 fn still_ours(types: &[String], text: Option<&[u8]>, offered: &str) -> bool {
     !types.is_empty()

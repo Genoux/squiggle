@@ -1,6 +1,6 @@
-//! Gramly: grammar suggestions in whatever text field has focus.
+//! Squiggle: grammar suggestions in whatever text field has focus.
 //!
-//! `gramly` runs the app. `gramly check` reads text on stdin and prints what
+//! `squiggle` runs the app. `squiggle check` reads text on stdin and prints what
 //! would be underlined - the same engine, without a screen, for debugging a
 //! suggestion and for scripts.
 
@@ -21,10 +21,11 @@ mod macos;
 mod surface;
 
 use anyhow::{Result, bail};
-use gramly_core::{Config, Local, ai, config, improve, protect};
+use squiggle_core::{Config, Local, ai, config, improve, protect};
 use std::io::Read;
 
 fn main() -> Result<()> {
+    config::adopt_old_dir();
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
         None | Some("run") => run(),
@@ -43,23 +44,23 @@ fn main() -> Result<()> {
         #[cfg(target_os = "macos")]
         Some("preview") => macos::preview(&args[1..]),
         Some("--version" | "-V") => {
-            println!("gramly {}", env!("CARGO_PKG_VERSION"));
+            println!("squiggle {}", env!("CARGO_PKG_VERSION"));
             Ok(())
         }
         Some("help" | "--help" | "-h") => {
             println!(
-                "gramly            run\n\
-                 gramly check      print suggestions for text on stdin\n\
-                 gramly check --local   the on-device pass only, nothing sent\n\
-                 gramly check --improve   the clearer wording the app proposes\n\
-                 gramly doctor     what Gramly can see in the focused field\n\
-                 gramly lab        audit accepting fixes in real text fields, off screen (macOS)\n\
-                 gramly preview [dir]   draw every card and the dictionary to PNG (macOS)\n\
-                 gramly --version"
+                "squiggle            run\n\
+                 squiggle check      print suggestions for text on stdin\n\
+                 squiggle check --local   the on-device pass only, nothing sent\n\
+                 squiggle check --improve   the clearer wording the app proposes\n\
+                 squiggle doctor     what Squiggle can see in the focused field\n\
+                 squiggle lab        audit accepting fixes in real text fields, off screen (macOS)\n\
+                 squiggle preview [dir]   draw every card and the dictionary to PNG (macOS)\n\
+                 squiggle --version"
             );
             Ok(())
         }
-        Some(other) => bail!("unknown command {other:?} (try `gramly help`)"),
+        Some(other) => bail!("unknown command {other:?} (try `squiggle help`)"),
     }
 }
 
@@ -69,7 +70,7 @@ fn run() -> Result<()> {
     #[cfg(target_os = "linux")]
     return linux::run();
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-    bail!("this platform has no surface yet; `gramly check` works everywhere")
+    bail!("this platform has no surface yet; `squiggle check` works everywhere")
 }
 
 /// The model's fixes for `text`, asked a paragraph at a time as the app
@@ -77,10 +78,10 @@ fn run() -> Result<()> {
 /// lines no longer matched, and nothing was shown.
 fn by_paragraph(
     text: &str,
-    ask: impl Fn(&str) -> Result<Vec<gramly_core::Fix>>,
-) -> Result<Vec<gramly_core::Fix>> {
+    ask: impl Fn(&str) -> Result<Vec<squiggle_core::Fix>>,
+) -> Result<Vec<squiggle_core::Fix>> {
     let mut fixes = Vec::new();
-    for (offset, paragraph) in gramly_core::worker::asked(text) {
+    for (offset, paragraph) in squiggle_core::worker::asked(text) {
         fixes.extend(ask(&paragraph)?.into_iter().map(|mut fix| {
             fix.start += offset;
             fix.end += offset;
@@ -134,7 +135,7 @@ fn check(local_only: bool, improving: bool) -> Result<()> {
 }
 
 pub(crate) fn note_line(message: &str) {
-    eprintln!("{} gramly: {message}", local_time());
+    eprintln!("{} squiggle: {message}", local_time());
 }
 
 fn local_time_at(at: std::time::SystemTime) -> libc::tm {

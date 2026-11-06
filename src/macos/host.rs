@@ -4,10 +4,10 @@
 use crate::macos::{ax, paste, primary_height};
 use crate::surface::write::Paste;
 use crate::surface::{Focus, Host, Point};
-use gramly_core::Config;
 use objc2::MainThreadMarker;
 use objc2_app_kit::NSEvent;
 use objc2_foundation::NSString;
+use squiggle_core::Config;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
@@ -19,7 +19,7 @@ pub struct MacHost {
     mtm: MainThreadMarker,
     /// When each app was last asked to expose its text (see `ax::wake`).
     woken: HashMap<i32, Instant>,
-    /// The process in front last tick, Gramly included.
+    /// The process in front last tick, Squiggle included.
     front_pid: Option<i32>,
 }
 

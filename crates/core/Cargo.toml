@@ -1,5 +1,5 @@
 [package]
-name = "gramly-core"
+name = "squiggle-core"
 version = "0.4.2"
 edition = "2024"
 license = "MIT"

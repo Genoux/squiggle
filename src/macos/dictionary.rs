@@ -1,8 +1,8 @@
-//! The dictionary window: the words Gramly never flags, a field to add one,
+//! The dictionary window: the words Squiggle never flags, a field to add one,
 //! the list to remove one from. Opened from the menu, where it replaced
 //! opening `dictionary.txt` in TextEdit.
 //!
-//! Drawn in Gramly's own look, not the Mac's: a borderless window with its
+//! Drawn in Squiggle's own look, not the Mac's: a borderless window with its
 //! own header and close button, the card's surface, buttons and spacing. A
 //! titled window brought the traffic lights and the system's title bar,
 //! which the Linux surface will not have. Borderless windows refuse keys
@@ -16,7 +16,6 @@
 use crate::macos::overlay::plain_button;
 use crate::macos::theme::{self, Face, Palette, Rgba};
 use crate::surface::dictionary;
-use gramly_core::config;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, NSObjectProtocol};
 use objc2::{AnyThread, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
@@ -29,6 +28,7 @@ use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 use objc2_foundation::{
     NSAttributedString, NSAttributedStringKey, NSDictionary, NSObject, NSString,
 };
+use squiggle_core::config;
 
 const WIDTH: f64 = theme::DICTIONARY_WIDTH;
 const HEIGHT: f64 = theme::DICTIONARY_HEIGHT;
@@ -43,7 +43,7 @@ const LIST_BOTTOM: f64 = 40.0;
 define_class!(
     #[unsafe(super(NSWindow, NSResponder, NSObject))]
     #[thread_kind = MainThreadOnly]
-    #[name = "GramlyKeyWindow"]
+    #[name = "SquiggleKeyWindow"]
     struct KeyWindow;
 
     unsafe impl NSObjectProtocol for KeyWindow {}
@@ -306,7 +306,7 @@ impl Dictionary {
         self.render(target, mtm);
     }
 
-    /// Shows `words` without reading the file, for `gramly preview`.
+    /// Shows `words` without reading the file, for `squiggle preview`.
     pub(crate) fn preview(&mut self, words: &[&str], target: &AnyObject, mtm: MainThreadMarker) {
         self.words = words.iter().map(|w| w.to_string()).collect();
         self.render(target, mtm);

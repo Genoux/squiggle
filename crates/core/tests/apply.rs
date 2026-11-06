@@ -6,7 +6,7 @@
 //! The texts are the shapes that broke in use: bullets, numbered lists,
 //! emoji before a typo, French, doubled spaces, fixes side by side.
 
-use gramly_core::{Fix, apply, diff, rebase};
+use squiggle_core::{Fix, apply, diff, rebase};
 
 /// (what was typed, what the model returned)
 const CASES: &[(&str, &str)] = &[

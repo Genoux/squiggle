@@ -15,11 +15,11 @@ mod tests;
 
 use super::card::Action;
 use super::{Field, Focus, Host, Mark, Overlay, Rect, update_config};
-use gramly_core::diff::{Piece, pieces};
-use gramly_core::off::Place;
-use gramly_core::router::{self, Blocked};
-use gramly_core::worker::{Outcome, Worker};
-use gramly_core::{Config, Fix, Kind, config, merge, rebase, sentence};
+use squiggle_core::diff::{Piece, pieces};
+use squiggle_core::off::Place;
+use squiggle_core::router::{self, Blocked};
+use squiggle_core::worker::{Outcome, Worker};
+use squiggle_core::{Config, Fix, Kind, config, merge, rebase, sentence};
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
@@ -117,7 +117,7 @@ pub struct Engine<H: Host, O: Overlay> {
     improve: Vec<Fix>,
     fixes: Vec<Fix>,
     /// What was dismissed, as [`dismissal`] keys it. Kept across fields and
-    /// apps until Gramly quits: cleared whenever focus moved, a suggestion
+    /// apps until Squiggle quits: cleared whenever focus moved, a suggestion
     /// dismissed in Slack was back after a look at another window.
     dismissed: HashSet<Dismissal>,
     /// Each drawn fix's word rectangle, by index into `fixes`.
@@ -163,14 +163,14 @@ pub struct Engine<H: Host, O: Overlay> {
     paused_until: Option<(Instant, String)>,
     /// Fields with no suggestions, from a card's "Don't suggest in this
     /// field": those that can be known again after a restart (saved), and
-    /// those that cannot, known by their element until Gramly quits.
+    /// those that cannot, known by their element until Squiggle quits.
     off: Vec<Place>,
     off_now: Vec<(<H::Field as Field>::Handle, String)>,
     /// The focused field as `off` knows it, and whether it is one of them.
     /// Worked out once, when it takes focus.
     here: Option<Place>,
     here_off: bool,
-    /// The last snapshot written for `GRAMLY_STATE`.
+    /// The last snapshot written for `SQUIGGLE_STATE`.
     exported: Option<String>,
 }
 
@@ -709,7 +709,7 @@ impl<H: Host, O: Overlay> Engine<H, O> {
             fixes.sort_by_key(|fix| fix.start);
         }
         self.fixes = fixes;
-        if std::env::var_os("GRAMLY_TRACE").is_some() {
+        if std::env::var_os("SQUIGGLE_TRACE").is_some() {
             let shown: Vec<String> = self
                 .fixes
                 .iter()
@@ -837,10 +837,10 @@ fn dismissal(text: &str, fix: &Fix) -> Dismissal {
     (context, fix.original(text), fix.replacement.clone())
 }
 
-/// Why the card or the underlines went away, with `GRAMLY_TRACE` set. A card
+/// Why the card or the underlines went away, with `SQUIGGLE_TRACE` set. A card
 /// "hiding for no reason" is only fixable with the reason.
 fn trace(why: &str) {
-    if std::env::var_os("GRAMLY_TRACE").is_some() {
+    if std::env::var_os("SQUIGGLE_TRACE").is_some() {
         note!("{why}");
     }
 }

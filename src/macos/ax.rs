@@ -2,18 +2,18 @@
 //! Grammarly for Mac reads and writes through.
 //!
 //! Every call here is a synchronous IPC into another process. A hung app
-//! would hang Gramly with it, so the system-wide element gets a short
+//! would hang Squiggle with it, so the system-wide element gets a short
 //! messaging timeout and every caller treats "no answer" as "no field".
 
 use crate::surface::write::{classify, read_back, settle};
 use crate::surface::{self, Field as _, Focus, Rect, Write};
-use gramly_core::fix::utf16_range;
-use gramly_core::off::Place;
 use objc2_app_kit::NSRunningApplication;
 use objc2_application_services::{AXError, AXUIElement, AXValue, AXValueType};
 use objc2_core_foundation::{
     CFBoolean, CFDictionary, CFRange, CFRetained, CFString, CFType, CFURL, CGPoint, CGRect, CGSize,
 };
+use squiggle_core::fix::utf16_range;
+use squiggle_core::off::Place;
 use std::ffi::c_void;
 use std::ptr::NonNull;
 
@@ -218,7 +218,7 @@ pub fn frontmost_pid() -> Option<i32> {
         .map(|app| app.processIdentifier())
 }
 
-/// The app in front as (bundle id, name), for the log. None while Gramly
+/// The app in front as (bundle id, name), for the log. None while Squiggle
 /// itself is in front: it comes forward only for its own dialogs.
 pub fn frontmost_app() -> Option<(String, String)> {
     let app = objc2_app_kit::NSWorkspace::sharedWorkspace().frontmostApplication()?;
@@ -246,9 +246,9 @@ pub fn frontmost_window_title() -> Option<String> {
 /// Asks an app to expose its text. Electron apps (Slack, Discord, VS Code,
 /// Claude) and Chromium build no accessibility tree until an assistive app
 /// sets `AXManualAccessibility` on them - which is what Grammarly does, and
-/// why it showed in a Claude chat box where Gramly did not. Apps that do not
+/// why it showed in a Claude chat box where Squiggle did not. Apps that do not
 /// know the attribute ignore it. Skipped apps are not asked: Orca, an
-/// Electron terminal, stopped taking pasted images once Gramly woke it.
+/// Electron terminal, stopped taking pasted images once Squiggle woke it.
 ///
 /// Zen (Gecko) answers `AXManualAccessibility` as unsupported and dropped
 /// its tree to the window's three buttons, reporting the window as focused
@@ -283,7 +283,7 @@ pub fn focus(current: Option<&Field>) -> Focus<Field> {
     }
 }
 
-/// The focused text field, with the reason when there is none - for `gramly
+/// The focused text field, with the reason when there is none - for `squiggle
 /// doctor`.
 pub fn explain_focus() -> Result<Field, String> {
     match examine_focus(None) {
@@ -308,7 +308,7 @@ fn examine_focus(current: Option<&Field>) -> Result<Option<Field>, (bool, String
         return Err((false, "the focused element has no process".into()));
     }
     if pid == std::process::id() as i32 {
-        return Err((true, "focus is in Gramly itself".into()));
+        return Err((true, "focus is in Squiggle itself".into()));
     }
     let app = bundle_id(pid);
     if SKIPPED_APPS.contains(&app.as_str()) {
@@ -388,7 +388,7 @@ impl Field {
 
     /// `value` with a line break wherever the field shows a new line and the
     /// value has none. Zen reports a box of three paragraphs as one run of
-    /// text ("...we roll backThanks"), and Gramly read "backThanks" as one
+    /// text ("...we roll backThanks"), and Squiggle read "backThanks" as one
     /// word; its bulleted list as "• fix the llimit• add a tset". The field's
     /// children still say where each line is: every paragraph or list item
     /// is a group of its own. Worked out once per change of the value.
@@ -587,7 +587,7 @@ impl Field {
         if !settle(|| self.selected_range() == Some((location, length))) {
             return false;
         }
-        if std::env::var_os("GRAMLY_TRACE").is_some() {
+        if std::env::var_os("SQUIGGLE_TRACE").is_some() {
             let value = self.hidden.borrow().0.clone();
             note!(
                 "select {original:?} at {location}+{length}: app string {:?}, selected {:?}, value {:?}",
@@ -615,7 +615,7 @@ impl Field {
         }
     }
 
-    /// For `gramly lab --probe`: how the app counts this field's text.
+    /// For `squiggle lab --probe`: how the app counts this field's text.
     pub fn probe(&self) -> String {
         let count = attribute(&self.element, "AXNumberOfCharacters").and_then(|v| {
             v.downcast_ref::<objc2_core_foundation::CFNumber>()
@@ -629,7 +629,7 @@ impl Field {
         )
     }
 
-    /// For `gramly lab --probe`: the field's descendants, role and text.
+    /// For `squiggle lab --probe`: the field's descendants, role and text.
     pub fn tree(&self) -> String {
         let mut out = String::new();
         let mut stack: Vec<(CFRetained<AXUIElement>, usize)> = children_of(&self.element)
@@ -648,7 +648,7 @@ impl Field {
         out
     }
 
-    /// For `gramly lab --probe`: a value range as the app counts it, and
+    /// For `squiggle lab --probe`: a value range as the app counts it, and
     /// what the app holds there.
     pub fn mapped(&self, location: usize, length: usize) -> String {
         let (at, len) = self.app_range(location, length);
@@ -659,7 +659,7 @@ impl Field {
         )
     }
 
-    /// For `gramly lab --probe`: sets the selection exactly as given, in the
+    /// For `squiggle lab --probe`: sets the selection exactly as given, in the
     /// app's own offsets.
     pub fn select_raw(&self, location: usize, length: usize) {
         if let Some(range) = range_value(location, length) {
@@ -1092,7 +1092,7 @@ fn intersect(a: CGRect, b: CGRect) -> CGRect {
     )
 }
 
-/// A raw description of whatever has focus, for `gramly doctor --raw`: the
+/// A raw description of whatever has focus, for `squiggle doctor --raw`: the
 /// app, role and every attribute name it offers, and nothing of its text.
 pub fn describe_focus() -> String {
     let system = unsafe { AXUIElement::new_system_wide() };
@@ -1204,7 +1204,7 @@ pub fn probe_children() -> String {
 
 /// The text field of app `pid` whose `AXIdentifier` (an AppKit view's
 /// identifier) or `AXDOMIdentifier` (a web element's id) is `id`. For
-/// `gramly lab`, which finds its test fields this way rather than by focus,
+/// `squiggle lab`, which finds its test fields this way rather than by focus,
 /// so the test window never has to come forward.
 ///
 /// With `window`, only windows whose title contains it are searched: a

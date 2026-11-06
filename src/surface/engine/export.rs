@@ -2,13 +2,13 @@ use super::Engine;
 use crate::surface::{Host, Overlay, Rect};
 
 impl<H: Host, O: Overlay> Engine<H, O> {
-    /// With `GRAMLY_STATE=<file>`, what is on screen is written there whenever
+    /// With `SQUIGGLE_STATE=<file>`, what is on screen is written there whenever
     /// it changes: the text, each fix, where its underline is drawn, and the
-    /// card's rows. `gramly lab --e2e` reads it to point the mouse at a real
+    /// card's rows. `squiggle lab --e2e` reads it to point the mouse at a real
     /// underline and click a real button. Rectangles are in global display
     /// coordinates, top-left origin, as mouse events take them.
     pub(super) fn export(&mut self) {
-        let Some(path) = std::env::var_os("GRAMLY_STATE") else {
+        let Some(path) = std::env::var_os("SQUIGGLE_STATE") else {
             return;
         };
         let rect = |r: Rect| [r.x, r.y, r.w, r.h];

@@ -1,10 +1,10 @@
 [workspace]
 # Declared explicitly: path dependencies are not members by default, and
-# `cargo test --workspace` would build gramly-core and run none of its tests.
+# `cargo test --workspace` would build squiggle-core and run none of its tests.
 members = [".", "crates/core"]
 
 [package]
-name = "gramly"
+name = "squiggle"
 version = "0.4.2"
 edition = "2024"
 license = "MIT"
@@ -12,7 +12,7 @@ description = "Grammar suggestions in whatever text field has focus"
 
 [dependencies]
 anyhow = "1"
-gramly-core = { path = "crates/core" }
+squiggle-core = { path = "crates/core" }
 libc = "0.2"
 serde_json = "1"
 
@@ -34,7 +34,7 @@ objc2-core-graphics = "0.3.2"
 objc2-core-text = "0.3.2"
 objc2-foundation = "0.3.2"
 objc2-quartz-core = "0.3.2"
-# `gramly lab` only: a web text box to audit fixes against, and the
+# `squiggle lab` only: a web text box to audit fixes against, and the
 # completion block its JavaScript answers through.
 objc2-web-kit = "0.3.2"
 block2 = "0.6.2"

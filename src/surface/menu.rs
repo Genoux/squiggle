@@ -4,10 +4,10 @@
 //!
 //! No status line and no on/off switch: running is on, quitting is off, and
 //! why a model call failed is in the log. Ordered as most menu bar apps are:
-//! the name, what Gramly is doing, settings, then the log and Quit.
+//! the name, what Squiggle is doing, settings, then the log and Quit.
 
 use super::{DIALECTS, PAUSES, Status};
-use gramly_core::router::Blocked;
+use squiggle_core::router::Blocked;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Command {
@@ -60,7 +60,7 @@ fn action(label: impl Into<String>, command: Command) -> Item {
 
 pub fn menu(status: &Status) -> Vec<Item> {
     let mut items = vec![
-        Item::Note(concat!("Gramly ", env!("CARGO_PKG_VERSION")).into()),
+        Item::Note(concat!("Squiggle ", env!("CARGO_PKG_VERSION")).into()),
         Item::Separator,
     ];
     if !status.trusted {
@@ -136,7 +136,7 @@ pub fn menu(status: &Status) -> Vec<Item> {
         action("OpenRouter key…", Command::SetKey),
         Item::Separator,
         action("Copy recent log", Command::CopyLog),
-        action("Quit Gramly", Command::Quit),
+        action("Quit Squiggle", Command::Quit),
     ]);
     items
 }
@@ -187,7 +187,7 @@ mod tests {
             .unwrap_or_else(|| panic!("no {wanted} submenu"))
     }
 
-    const NAME: &str = concat!("Gramly ", env!("CARGO_PKG_VERSION"));
+    const NAME: &str = concat!("Squiggle ", env!("CARGO_PKG_VERSION"));
 
     #[test]
     fn the_menu_is_in_order() {
@@ -202,7 +202,7 @@ mod tests {
                 "Personal dictionary…",
                 "OpenRouter key…",
                 "Copy recent log",
-                "Quit Gramly",
+                "Quit Squiggle",
             ]
         );
         let separators: Vec<usize> = items

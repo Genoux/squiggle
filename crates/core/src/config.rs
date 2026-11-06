@@ -1,4 +1,4 @@
-//! Two layers: these defaults, then `~/.config/gramly/config.toml`.
+//! Two layers: these defaults, then `~/.config/squiggle/config.toml`.
 //!
 //! Flat `key = value`, the same shape as Flow's file, so one person editing
 //! both never has to remember which is which. An absent file is normal; a
@@ -30,10 +30,30 @@ impl Default for Config {
 
 pub fn dir() -> PathBuf {
     if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME").filter(|v| !v.is_empty()) {
-        return PathBuf::from(xdg).join("gramly");
+        return PathBuf::from(xdg).join("squiggle");
     }
     let home = std::env::var_os("HOME").unwrap_or_default();
-    PathBuf::from(home).join(".config/gramly")
+    PathBuf::from(home).join(".config/squiggle")
+}
+
+/// Squiggle was called Gramly before 1.0 and kept its settings, dictionary
+/// and fields turned off in a `gramly` folder beside this one. Moved once,
+/// so an update keeps them; never onto a folder that already exists, which
+/// would leave two sets to merge.
+pub fn adopt_old_dir() {
+    let new = dir();
+    if let Some(old) = new.parent().map(|parent| parent.join("gramly"))
+        && let Err(e) = adopt(&old, &new)
+    {
+        eprintln!("could not move {} to {}: {e}", old.display(), new.display());
+    }
+}
+
+fn adopt(old: &Path, new: &Path) -> std::io::Result<()> {
+    if old.is_dir() && !new.exists() {
+        std::fs::rename(old, new)?;
+    }
+    Ok(())
 }
 
 pub fn config_path() -> PathBuf {
@@ -78,7 +98,7 @@ impl Config {
                 },
                 // Settings since removed: "Check as I type" and apps turned
                 // off from the menu. Read and let go, so the file still
-                // loads and an old `enabled = false` cannot leave Gramly
+                // loads and an old `enabled = false` cannot leave Squiggle
                 // off with no switch to turn it on; the next save drops them.
                 "enabled" | "off_in" => {}
                 // Named, not echoed: the line may be a key pasted in the wrong place.
@@ -262,6 +282,28 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_old_folder_moves_once_and_never_over_a_new_one() {
+        let root = std::env::temp_dir().join(format!("squiggle-adopt-{}", std::process::id()));
+        let (old, new) = (root.join("gramly"), root.join("squiggle"));
+        std::fs::create_dir_all(&old).unwrap();
+        std::fs::write(old.join("dictionary.txt"), "Hyprland\n").unwrap();
+        adopt(&old, &new).unwrap();
+        assert!(!old.exists());
+        assert_eq!(
+            std::fs::read_to_string(new.join("dictionary.txt")).unwrap(),
+            "Hyprland\n"
+        );
+
+        std::fs::create_dir_all(&old).unwrap();
+        adopt(&old, &new).unwrap();
+        assert!(
+            old.exists(),
+            "a second folder is left for the user to merge"
+        );
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
     fn a_word_appended_to_an_unfinished_line_starts_its_own() {
         assert_eq!(appended(true, " bar "), "\nbar\n");
         assert_eq!(appended(false, "bar"), "bar\n");
@@ -297,7 +339,8 @@ mod tests {
     }
 
     fn scratch(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("gramly-config-{}-{name}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("squiggle-config-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir.join("config.toml")

@@ -4,7 +4,7 @@
 use super::{ACCEPTED_FOR, Engine, dismissal};
 use crate::surface::write::{self, Refusal};
 use crate::surface::{Host, Overlay, Rect};
-use gramly_core::Fix;
+use squiggle_core::Fix;
 use std::time::{Duration, Instant};
 
 /// How long an accepted fix may still be on its way into the field. A second
@@ -108,7 +108,7 @@ impl<H: Host, O: Overlay> Engine<H, O> {
     }
 
     /// After an accepted fix the field should read as expected within a second.
-    /// A correction that ate the user's text is the worst thing Gramly can do:
+    /// A correction that ate the user's text is the worst thing Squiggle can do:
     /// a field that changed and is still `LOST` or more characters shorter than
     /// both what it held and what it should hold, once the app has had
     /// `SETTLED` to finish the paste, is taken back with ⌘Z. A sentence replaced

@@ -3,10 +3,10 @@
 <plist version="1.0">
 <dict>
 	<key>Label</key>
-	<string>dev.genoux.gramly</string>
+	<string>dev.genoux.squiggle</string>
 	<key>ProgramArguments</key>
 	<array>
-		<string>@APP@/Contents/MacOS/gramly</string>
+		<string>@APP@/Contents/MacOS/squiggle</string>
 	</array>
 	<key>RunAtLoad</key>
 	<true/>

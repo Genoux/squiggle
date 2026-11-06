@@ -58,13 +58,13 @@ jobs:
       - name: Build
         run: cargo build --release
 
-      # Laid out so packaging/install.sh, unpacked as-is, finds bin/gramly and
+      # Laid out so packaging/install.sh, unpacked as-is, finds bin/squiggle and
       # skips the build.
       - name: Package
         run: |
-          name="gramly-${GITHUB_REF_NAME}-aarch64-macos"
+          name="squiggle-${GITHUB_REF_NAME}-aarch64-macos"
           mkdir -p "$name/bin"
-          cp target/release/gramly "$name/bin/"
+          cp target/release/squiggle "$name/bin/"
           cp -r packaging "$name/"
           cp README.md TROUBLESHOOTING.md LICENSE "$name/"
           tar czf "$name.tar.gz" "$name"
@@ -90,4 +90,4 @@ jobs:
             $prerelease \
             --title "$GITHUB_REF_NAME" \
             --generate-notes \
-            gramly-*.tar.gz gramly-*.tar.gz.sha256
+            squiggle-*.tar.gz squiggle-*.tar.gz.sha256

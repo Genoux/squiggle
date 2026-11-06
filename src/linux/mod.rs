@@ -31,7 +31,7 @@ pub fn run() -> anyhow::Result<()> {
     gtk::init()?;
     anyhow::ensure!(
         gtk4_layer_shell::is_supported(),
-        "this compositor does not offer wlr-layer-shell; Gramly draws on it"
+        "this compositor does not offer wlr-layer-shell; Squiggle draws on it"
     );
     if !atspi::enable()? {
         note!("accessibility turned on now; apps started before this may need a restart");
@@ -140,11 +140,11 @@ fn with_engine(shared: &Weak<RefCell<Option<LinuxEngine>>>, change: impl FnOnce(
     }
 }
 
-/// What Gramly can see right now, for TROUBLESHOOTING.md. Waits a moment so
+/// What Squiggle can see right now, for TROUBLESHOOTING.md. Waits a moment so
 /// there is time to click into the field in question.
 pub fn doctor() -> anyhow::Result<()> {
-    let config = gramly_core::Config::load()?;
-    println!("gramly {}", env!("CARGO_PKG_VERSION"));
+    let config = squiggle_core::Config::load()?;
+    println!("squiggle {}", env!("CARGO_PKG_VERSION"));
     let was_on = atspi::enable()?;
     println!(
         "accessibility    {}",

@@ -15,11 +15,11 @@ pub use app::run;
 pub use lab::{host as lab_host, run as lab};
 pub use preview::run as preview;
 
-/// What Gramly can see right now, for TROUBLESHOOTING.md. Waits a moment so
+/// What Squiggle can see right now, for TROUBLESHOOTING.md. Waits a moment so
 /// there is time to click into the field in question.
 pub fn doctor() -> anyhow::Result<()> {
-    let config = gramly_core::Config::load()?;
-    println!("gramly {}", env!("CARGO_PKG_VERSION"));
+    let config = squiggle_core::Config::load()?;
+    println!("squiggle {}", env!("CARGO_PKG_VERSION"));
     println!(
         "accessibility    {}",
         if ax::trusted(false) {

@@ -1,4 +1,4 @@
-//! Everything Gramly knows about text, and nothing about screens.
+//! Everything Squiggle knows about text, and nothing about screens.
 //!
 //! The platforms (`src/macos`, later `src/linux`) read the focused field, ask
 //! this crate what to fix, and draw the answer. Keeping it free of any

@@ -6,7 +6,7 @@
 //! Either the id or the label is enough, as long as the app and site agree:
 //! a web page may make up a new id on every load, and a label may be
 //! reworded, but rarely both at once. A field with neither cannot be known
-//! again; the platform keeps it off until Gramly quits instead.
+//! again; the platform keeps it off until Squiggle quits instead.
 //!
 //! One field per line in `off.txt` beside the config, its parts separated
 //! by tabs: app, site, id, label, and the name the menu shows.
@@ -166,7 +166,7 @@ mod tests {
 
     #[test]
     fn saved_and_loaded_unchanged() {
-        let dir = std::env::temp_dir().join(format!("gramly-off-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("squiggle-off-{}", std::process::id()));
         let path = dir.join("off.txt");
         let mut web = place("", "Leave a comment");
         web.site = "github.com".into();

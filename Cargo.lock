@@ -2631,43 +2631,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "gramly"
-version = "0.4.2"
-dependencies = [
- "anyhow",
- "atspi-proxies",
- "block2",
- "gramly-core",
- "gtk4",
- "gtk4-layer-shell",
- "ksni",
- "libc",
- "objc2",
- "objc2-app-kit",
- "objc2-application-services",
- "objc2-core-foundation",
- "objc2-core-graphics",
- "objc2-core-text",
- "objc2-foundation",
- "objc2-quartz-core",
- "objc2-web-kit",
- "serde_json",
- "wl-clipboard-rs",
- "zbus",
-]
-
-[[package]]
-name = "gramly-core"
-version = "0.4.2"
-dependencies = [
- "anyhow",
- "harper-core",
- "serde",
- "serde_json",
- "whatlang",
-]
-
-[[package]]
 name = "graphene-rs"
 version = "0.22.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5114,6 +5077,43 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "eda41003dc44290527a59b13432d4a0379379fa074b70174882adfbdfd917844"
 dependencies = [
  "bitflags",
+]
+
+[[package]]
+name = "squiggle"
+version = "0.4.2"
+dependencies = [
+ "anyhow",
+ "atspi-proxies",
+ "block2",
+ "gtk4",
+ "gtk4-layer-shell",
+ "ksni",
+ "libc",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-application-services",
+ "objc2-core-foundation",
+ "objc2-core-graphics",
+ "objc2-core-text",
+ "objc2-foundation",
+ "objc2-quartz-core",
+ "objc2-web-kit",
+ "serde_json",
+ "squiggle-core",
+ "wl-clipboard-rs",
+ "zbus",
+]
+
+[[package]]
+name = "squiggle-core"
+version = "0.4.2"
+dependencies = [
+ "anyhow",
+ "harper-core",
+ "serde",
+ "serde_json",
+ "whatlang",
 ]
 
 [[package]]

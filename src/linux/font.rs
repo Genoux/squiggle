@@ -1,4 +1,4 @@
-//! Gramly's font on a machine that does not have it. The bytes the binary
+//! Squiggle's font on a machine that does not have it. The bytes the binary
 //! carries are written once under the runtime directory and handed to
 //! fontconfig as application fonts, which only this process sees: nothing is
 //! installed, and an uninstall leaves nothing behind. Registered before GTK
@@ -18,7 +18,7 @@ unsafe extern "C" {
 /// The runtime directory only: it is the user's alone (0700). A shared
 /// `/tmp` would let another user plant a font this process loads.
 fn folder() -> Option<PathBuf> {
-    std::env::var_os("XDG_RUNTIME_DIR").map(|dir| PathBuf::from(dir).join("gramly/fonts"))
+    std::env::var_os("XDG_RUNTIME_DIR").map(|dir| PathBuf::from(dir).join("squiggle/fonts"))
 }
 
 /// Written beside and renamed into place, so a second instance starting at
@@ -44,7 +44,7 @@ fn add(path: &Path) -> bool {
 
 pub fn register() {
     let Some(folder) = folder() else {
-        note!("no XDG_RUNTIME_DIR: Gramly's font not registered");
+        note!("no XDG_RUNTIME_DIR: Squiggle's font not registered");
         return;
     };
     for (weight, bytes) in FONTS {

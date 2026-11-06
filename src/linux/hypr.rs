@@ -25,20 +25,20 @@ pub struct Monitor {
     pub usable: Rect,
 }
 
-/// Matches the layers Gramly draws, by namespace, so Hyprland does not fade
+/// Matches the layers Squiggle draws, by namespace, so Hyprland does not fade
 /// them in and out: nothing animates.
-const NO_ANIMATION: &str = r#"dispatch function() hl.layer_rule({ name = "gramly-still", match = { namespace = "^gramly-.*$" }, no_anim = true }) end"#;
+const NO_ANIMATION: &str = r#"dispatch function() hl.layer_rule({ name = "squiggle-still", match = { namespace = "^squiggle-.*$" }, no_anim = true }) end"#;
 
 /// The dictionary window's title, which its rule matches. A title and not a
 /// class: GTK takes the class from the program for every plain window, so
 /// the OpenRouter key window would share it.
-pub const DICTIONARY_TITLE: &str = "Gramly dictionary";
+pub const DICTIONARY_TITLE: &str = "Squiggle dictionary";
 
 /// A small utility window floats in the middle of the screen; tiled, it
 /// would take half of it.
 fn float_dictionary_command() -> String {
     format!(
-        r#"dispatch function() hl.window_rule({{ name = "gramly-dictionary", match = {{ title = "^{DICTIONARY_TITLE}$" }}, float = true, center = true }}) end"#
+        r#"dispatch function() hl.window_rule({{ name = "squiggle-dictionary", match = {{ title = "^{DICTIONARY_TITLE}$" }}, float = true, center = true }}) end"#
     )
 }
 
@@ -65,7 +65,7 @@ fn send_rules() {
     .for_each(|(rule, reply)| note!("Hyprland did not take the {rule} rule: {reply:?}"));
 }
 
-/// Sends Gramly's rules now and again after every config reload, on a
+/// Sends Squiggle's rules now and again after every config reload, on a
 /// thread of its own. A rule sent over the socket lasts only until the next
 /// reload; after one, the user's `layersIn` slide moved every underline and
 /// card into place.
@@ -328,7 +328,7 @@ mod tests {
     fn the_dictionary_window_floats_centred_by_title() {
         assert_eq!(
             float_dictionary_command(),
-            r#"dispatch function() hl.window_rule({ name = "gramly-dictionary", match = { title = "^Gramly dictionary$" }, float = true, center = true }) end"#
+            r#"dispatch function() hl.window_rule({ name = "squiggle-dictionary", match = { title = "^Squiggle dictionary$" }, float = true, center = true }) end"#
         );
     }
 

@@ -9,7 +9,6 @@ use crate::surface::menu::{Command, Item, menu};
 use crate::surface::{
     ADD_CREDITS, Action, Engine, Status, TICK, parse_key, recent_log, update_config,
 };
-use gramly_core::Config;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, NSObject, NSObjectProtocol};
 use objc2::{
@@ -22,6 +21,7 @@ use objc2_app_kit::{
 };
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 use objc2_foundation::{NSString, NSTimer, NSURL};
+use squiggle_core::Config;
 use std::cell::RefCell;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -45,7 +45,7 @@ pub struct Ivars {
 define_class!(
     #[unsafe(super(NSObject))]
     #[thread_kind = MainThreadOnly]
-    #[name = "GramlyController"]
+    #[name = "SquiggleController"]
     #[ivars = Ivars]
     pub struct Controller;
 
@@ -299,7 +299,7 @@ fn grant_access() {
 
 fn copy_recent_log(mtm: MainThreadMarker) {
     let path = std::path::PathBuf::from(std::env::var_os("HOME").unwrap_or_default())
-        .join("Library/Logs/gramly.log");
+        .join("Library/Logs/squiggle.log");
     let message = match std::fs::read_to_string(&path) {
         Ok(log) => {
             let recent = recent_log(&log);
@@ -308,7 +308,7 @@ fn copy_recent_log(mtm: MainThreadMarker) {
             board.setString_forType(&NSString::from_str(&recent), unsafe {
                 objc2_app_kit::NSPasteboardTypeString
             });
-            "Copied the end of Gramly's log. Paste it into a message to report what went wrong."
+            "Copied the end of Squiggle's log. Paste it into a message to report what went wrong."
                 .to_string()
         }
         Err(err) => format!("Could not read {}: {err}", path.display()),
@@ -328,7 +328,7 @@ fn ask_for_key(mtm: MainThreadMarker) {
     let alert = NSAlert::new(mtm);
     alert.setMessageText(&NSString::from_str("OpenRouter key"));
     alert.setInformativeText(&NSString::from_str(
-        "Paste a key from openrouter.ai/keys. It is stored in ~/.config/gramly/config.toml, readable only by you. Leave it empty to check on this Mac only.",
+        "Paste a key from openrouter.ai/keys. It is stored in ~/.config/squiggle/config.toml, readable only by you. Leave it empty to check on this Mac only.",
     ));
     alert.addButtonWithTitle(&NSString::from_str("Save"));
     alert.addButtonWithTitle(&NSString::from_str("Cancel"));
@@ -386,7 +386,7 @@ fn build_menu(state: &mut State, controller: &Controller, mtm: MainThreadMarker)
         // equivalent (tools-check-spelling).
         let image = NSImage::imageWithSystemSymbolName_accessibilityDescription(
             &NSString::from_str("text.badge.checkmark"),
-            Some(&NSString::from_str("Gramly")),
+            Some(&NSString::from_str("Squiggle")),
         );
         match image {
             Some(image) => {
@@ -406,7 +406,7 @@ fn build_menu(state: &mut State, controller: &Controller, mtm: MainThreadMarker)
 }
 
 /// ⌘V, ⌘C, ⌘X and ⌘A are menu key equivalents, not text-field behaviour: an
-/// app with no Edit menu cannot paste into its own key dialog. Gramly shows
+/// app with no Edit menu cannot paste into its own key dialog. Squiggle shows
 /// no menu bar, but the menu still has to exist for the shortcuts to route.
 pub(crate) fn edit_menu(mtm: MainThreadMarker) -> Retained<NSMenu> {
     let main = NSMenu::new(mtm);
@@ -416,7 +416,7 @@ pub(crate) fn edit_menu(mtm: MainThreadMarker) -> Retained<NSMenu> {
         ("Copy", sel!(copy:), "c"),
         ("Paste", sel!(paste:), "v"),
         ("Select All", sel!(selectAll:), "a"),
-        // The dictionary window: Gramly has no File or Window menu to carry it.
+        // The dictionary window: Squiggle has no File or Window menu to carry it.
         ("Close Window", sel!(performClose:), "w"),
     ] {
         // No target: the action goes to whatever has focus, the key field.
@@ -439,7 +439,7 @@ pub(crate) fn edit_menu(mtm: MainThreadMarker) -> Retained<NSMenu> {
 pub fn run() -> anyhow::Result<()> {
     let mtm = MainThreadMarker::new().ok_or_else(|| anyhow::anyhow!("not on the main thread"))?;
     let app = NSApplication::sharedApplication(mtm);
-    // No Dock icon and no menu bar of its own: Gramly lives in the status
+    // No Dock icon and no menu bar of its own: Squiggle lives in the status
     // item and on top of other apps' text.
     app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
     app.setMainMenu(Some(&edit_menu(mtm)));

@@ -4,7 +4,7 @@
 use super::{Engine, HOVER, LEAVE, ORPHAN, trace};
 use crate::surface::card::card;
 use crate::surface::{Host, Overlay, Point, Rect, in_corridor};
-use gramly_core::{Fix, Kind, sentence};
+use squiggle_core::{Fix, Kind, sentence};
 use std::time::Instant;
 
 impl<H: Host, O: Overlay> Engine<H, O> {

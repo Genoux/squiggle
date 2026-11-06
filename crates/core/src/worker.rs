@@ -83,15 +83,15 @@ impl Worker {
         let local_tx = outcome_tx.clone();
         let improve_tx = outcome_tx.clone();
         std::thread::Builder::new()
-            .name("gramly-local".into())
+            .name("squiggle-local".into())
             .spawn(move || local_loop(local_in, [ai_out, improve_out], local_tx))
             .expect("spawning the local checker");
         std::thread::Builder::new()
-            .name("gramly-ai".into())
+            .name("squiggle-ai".into())
             .spawn(move || model_loop(Pass::Correct, ai_in, outcome_tx))
             .expect("spawning the model checker");
         std::thread::Builder::new()
-            .name("gramly-improve".into())
+            .name("squiggle-improve".into())
             .spawn(move || model_loop(Pass::Improve, improve_in, improve_tx))
             .expect("spawning the improvement checker");
 

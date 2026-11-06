@@ -2,9 +2,9 @@
 //! a toplevel takes keyboard focus on Wayland, and the key is pasted in.
 
 use crate::surface::{parse_key, update_config};
-use gramly_core::Config;
 use gtk::prelude::*;
 use gtk4 as gtk;
+use squiggle_core::Config;
 use std::cell::RefCell;
 
 thread_local! {
@@ -53,7 +53,7 @@ fn build(saved: impl Fn() + 'static) -> gtk::Window {
         .build();
     let help = gtk::Label::builder()
         .label(
-            "Paste a key from openrouter.ai/keys. It is stored in ~/.config/gramly/config.toml, readable only by you. Leave it empty to check on this computer only.",
+            "Paste a key from openrouter.ai/keys. It is stored in ~/.config/squiggle/config.toml, readable only by you. Leave it empty to check on this computer only.",
         )
         .wrap(true)
         .max_width_chars(48)

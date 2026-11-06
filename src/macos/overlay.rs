@@ -1,4 +1,4 @@
-//! What Gramly draws on top of other apps: underlines and the suggestion
+//! What Squiggle draws on top of other apps: underlines and the suggestion
 //! card. There is no Accept-all pill: Grammarly has none, and a badge in
 //! the corner of every field was noise.
 //!
@@ -109,7 +109,7 @@ fn panel(mtm: MainThreadMarker, interactive: bool, level: isize) -> Retained<NSP
     );
     panel.setOpaque(false);
     panel.setBackgroundColor(Some(&NSColor::clearColor()));
-    // Gramly draws the card's shadow itself (`shade`), so it is the same on
+    // Squiggle draws the card's shadow itself (`shade`), so it is the same on
     // Linux; the system's would sit under it.
     panel.setHasShadow(false);
     panel.setIgnoresMouseEvents(!interactive);
@@ -210,7 +210,7 @@ impl surface::Overlay for Overlay {
         if self.drawn == marks && self.marks_panel.isVisible() && self.marks_panel.frame() == area {
             return;
         }
-        if std::env::var_os("GRAMLY_TRACE").is_some() {
+        if std::env::var_os("SQUIGGLE_TRACE").is_some() {
             note!("drawing {} underlines in {area:?}", marks.len());
         }
         let Some(root) = self.marks_panel.contentView().and_then(|v| v.layer()) else {
@@ -450,7 +450,7 @@ struct Row {
     hover: Rgba,
     /// The outline at rest; it gives way to the fill under the pointer.
     line: Option<Rgba>,
-    /// What clicking it does, for `GRAMLY_STATE`; none for a button of
+    /// What clicking it does, for `SQUIGGLE_STATE`; none for a button of
     /// another window.
     action: Option<Action>,
 }

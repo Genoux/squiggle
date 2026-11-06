@@ -233,13 +233,13 @@ mod tests {
     #[test]
     fn a_known_word_is_not_a_misspelling() {
         let mut local = Local::new(Dialect::American);
-        let text = "Gramly runs on Hyprland.";
-        local.set_known_words(["gramly".into(), "Hyprland".into()]);
+        let text = "Squiggle runs on Hyprland.";
+        local.set_known_words(["squiggle".into(), "Hyprland".into()]);
         let fixes = local.check(text);
         assert!(
             !fixes
                 .iter()
-                .any(|f| matches!(f.original(text).as_str(), "Gramly" | "Hyprland")),
+                .any(|f| matches!(f.original(text).as_str(), "Squiggle" | "Hyprland")),
             "{fixes:?}"
         );
     }

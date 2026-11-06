@@ -1,7 +1,7 @@
 //! Gecko's padding after astral characters, and the offsets it shifts.
 
 /// Gecko counts UTF-16 and pads each astral character with a U+FEFF; GTK4
-/// and Chromium count characters. The text Gramly reads has the padding
+/// and Chromium count characters. The text Squiggle reads has the padding
 /// removed, so offsets are characters everywhere, and this is where each
 /// piece sat: the position in the stripped text that each removed U+FEFF
 /// stood before.
@@ -20,7 +20,7 @@ pub(super) fn strip_padding(raw: &str) -> (String, Vec<usize>) {
     (text, padding)
 }
 
-/// Where the app counts the character Gramly counts at `offset`.
+/// Where the app counts the character Squiggle counts at `offset`.
 pub(super) fn app_offset(padding: &[usize], offset: usize) -> usize {
     offset + padding.iter().filter(|&&at| at <= offset).count()
 }

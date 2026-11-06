@@ -1,13 +1,13 @@
 //! Writing accepted fixes into the field: directly when the app honours it,
 //! as a paste over a confirmed selection when it does not. Shared by the
-//! engine and by `gramly lab`, which runs this same code against real text
+//! engine and by `squiggle lab`, which runs this same code against real text
 //! fields to audit it.
 //!
 //! When in doubt nothing is written: every refusal says why, and the caller
 //! logs it.
 
 use super::{Field, Write};
-use gramly_core::{Fix, apply};
+use squiggle_core::{Fix, apply};
 use std::time::{Duration, Instant};
 
 /// Why a fix was not written.
@@ -163,7 +163,7 @@ fn paste_span<F: Field>(
     let replacement: String = corrected.chars().skip(lo).take(corrected_hi - lo).collect();
     let covered: String = current.chars().skip(lo).take(current_hi - lo).collect();
     // Pasted across a line, a web list re-split its items around the paste
-    // and left a stray space (`gramly lab`, "Web list"). The app groups by
+    // and left a stray space (`squiggle lab`, "Web list"). The app groups by
     // sentence, which never crosses a line, so this only guards an app that
     // reports its lines some other way.
     if covered.contains('\n') || replacement.contains('\n') {
@@ -234,7 +234,7 @@ fn select_and_check<F: Field>(field: &F, span: &Span) -> Result<(), Refusal> {
 mod tests {
     use super::*;
     use crate::surface::Rect;
-    use gramly_core::{Kind, Source};
+    use squiggle_core::{Kind, Source};
     use std::cell::{Cell, RefCell};
     use std::collections::VecDeque;
     use std::rc::Rc;
@@ -285,8 +285,8 @@ mod tests {
 
         fn handle(&self) {}
 
-        fn place(&self) -> gramly_core::off::Place {
-            gramly_core::off::Place::default()
+        fn place(&self) -> squiggle_core::off::Place {
+            squiggle_core::off::Place::default()
         }
 
         fn value(&self) -> Option<String> {

@@ -10,7 +10,7 @@
 //! together.
 
 use super::{Mark, Rect};
-use gramly_core::Kind;
+use squiggle_core::Kind;
 use std::time::Duration;
 
 #[derive(Debug, Clone, Copy, PartialEq)]

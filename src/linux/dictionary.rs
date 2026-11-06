@@ -8,9 +8,9 @@
 use super::hypr::DICTIONARY_TITLE;
 use crate::surface::dictionary as text;
 use crate::surface::theme::{self, Face, Palette};
-use gramly_core::config;
 use gtk::prelude::*;
 use gtk4 as gtk;
+use squiggle_core::config;
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -47,7 +47,7 @@ fn label(text: &str, class: &str) -> gtk::Label {
 
 fn cross(tooltip: &str) -> gtk::Button {
     let button = gtk::Button::with_label("×");
-    button.add_css_class("gramly-cross");
+    button.add_css_class("squiggle-cross");
     button.set_focusable(false);
     button.set_tooltip_text(Some(tooltip));
     button
@@ -56,7 +56,7 @@ fn cross(tooltip: &str) -> gtk::Button {
 impl View {
     fn new(changed: Box<dyn Fn()>) -> Rc<Self> {
         let pad = theme::DICTIONARY_PAD as i32;
-        let title = label(text::TITLE, "gramly-dictionary-title");
+        let title = label(text::TITLE, "squiggle-dictionary-title");
         title.set_hexpand(true);
         let close = cross("Close");
         let header = gtk::Box::new(gtk::Orientation::Horizontal, 0);
@@ -68,10 +68,10 @@ impl View {
             .hexpand(true)
             .height_request(theme::BUTTON_HEIGHT as i32)
             .build();
-        entry.add_css_class("gramly-field");
+        entry.add_css_class("squiggle-field");
         let add = gtk::Button::with_label(text::ADD);
-        add.add_css_class("gramly-button");
-        add.add_css_class("gramly-plain");
+        add.add_css_class("squiggle-button");
+        add.add_css_class("squiggle-plain");
         add.set_focusable(false);
         add.set_height_request(theme::BUTTON_HEIGHT as i32);
         let form = gtk::Box::new(gtk::Orientation::Horizontal, 8);
@@ -84,7 +84,7 @@ impl View {
             .hscrollbar_policy(gtk::PolicyType::Never)
             .child(&list)
             .build();
-        let count = label("", "gramly-dictionary-count");
+        let count = label("", "squiggle-dictionary-count");
 
         let body = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
@@ -95,7 +95,7 @@ impl View {
             .margin_end(pad)
             .build();
         body.append(&header);
-        body.append(&label(text::SUBTITLE, "gramly-dictionary-hint"));
+        body.append(&label(text::SUBTITLE, "squiggle-dictionary-hint"));
         body.append(&form);
         body.append(&scroll);
         body.append(&count);
@@ -108,7 +108,7 @@ impl View {
             .default_height(theme::DICTIONARY_HEIGHT as i32)
             .child(&body)
             .build();
-        window.add_css_class("gramly-dictionary");
+        window.add_css_class("squiggle-dictionary");
 
         let view = Rc::new(Self {
             window,
@@ -172,7 +172,7 @@ impl View {
         }
         let words = config::sorted_dictionary();
         if words.is_empty() {
-            let empty = label(text::EMPTY, "gramly-dictionary-hint");
+            let empty = label(text::EMPTY, "squiggle-dictionary-hint");
             empty.set_wrap(true);
             empty.set_justify(gtk::Justification::Center);
             empty.set_margin_top(28);
@@ -183,7 +183,7 @@ impl View {
             let weak = Rc::downgrade(self);
             let target = word.clone();
             remove.connect_clicked(move |_| weak.upgrade().iter().for_each(|v| v.remove(&target)));
-            let name = label(word, "gramly-dictionary-word");
+            let name = label(word, "squiggle-dictionary-word");
             name.set_hexpand(true);
             name.set_ellipsize(gtk::pango::EllipsizeMode::End);
             let row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
@@ -208,18 +208,18 @@ fn font(face: Face) -> String {
 /// beats a matugen theme here too.
 pub fn css(p: &Palette) -> String {
     format!(
-        "window.gramly-dictionary, window.gramly-dictionary * {{ font-family: \"{family}\", sans-serif; }}
-         window.gramly-dictionary {{ background-color: {surface}; border: {edge}px solid {edge_color}; border-radius: {corner}px; box-shadow: none; }}
-         .gramly-dictionary-title {{ color: {text}; {title} }}
-         .gramly-dictionary-hint {{ color: {text2}; {hint} }}
-         .gramly-dictionary-count {{ color: {text2}; {count} }}
-         .gramly-dictionary-word {{ color: {text}; {word} }}
-         entry.gramly-field {{ min-height: 0; padding: 0 10px; background: none; background-color: transparent; border: 1px solid {line}; border-radius: {control}px; box-shadow: none; outline: none; color: {text}; caret-color: {text}; {word} }}
-         entry.gramly-field text placeholder {{ color: {text2}; }}
-         button.gramly-cross {{ all: unset; padding: 0 8px; border-radius: {control}px; }}
-         button.gramly-cross label {{ color: {text2}; font-size: 18px; }}
-         button.gramly-cross:hover {{ background-color: {fill}; }}
-         button.gramly-cross:hover label {{ color: {text}; }}
+        "window.squiggle-dictionary, window.squiggle-dictionary * {{ font-family: \"{family}\", sans-serif; }}
+         window.squiggle-dictionary {{ background-color: {surface}; border: {edge}px solid {edge_color}; border-radius: {corner}px; box-shadow: none; }}
+         .squiggle-dictionary-title {{ color: {text}; {title} }}
+         .squiggle-dictionary-hint {{ color: {text2}; {hint} }}
+         .squiggle-dictionary-count {{ color: {text2}; {count} }}
+         .squiggle-dictionary-word {{ color: {text}; {word} }}
+         entry.squiggle-field {{ min-height: 0; padding: 0 10px; background: none; background-color: transparent; border: 1px solid {line}; border-radius: {control}px; box-shadow: none; outline: none; color: {text}; caret-color: {text}; {word} }}
+         entry.squiggle-field text placeholder {{ color: {text2}; }}
+         button.squiggle-cross {{ all: unset; padding: 0 8px; border-radius: {control}px; }}
+         button.squiggle-cross label {{ color: {text2}; font-size: 18px; }}
+         button.squiggle-cross:hover {{ background-color: {fill}; }}
+         button.squiggle-cross:hover label {{ color: {text}; }}
          scrolledwindow undershoot, scrolledwindow overshoot {{ background: none; }}",
         family = theme::FONT_FAMILY,
         surface = p.surface.css(),

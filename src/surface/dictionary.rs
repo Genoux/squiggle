@@ -1,7 +1,7 @@
 //! What the dictionary window says, the same on every platform.
 
 pub const TITLE: &str = "Dictionary";
-pub const SUBTITLE: &str = "Gramly never flags these words.";
+pub const SUBTITLE: &str = "Squiggle never flags these words.";
 pub const ADD: &str = "Add";
 pub const PLACEHOLDER: &str = "Add a word";
 pub const EMPTY: &str = "No words yet. Words you add here, or from a card, show up in this list.";

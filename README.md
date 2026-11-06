@@ -1,9 +1,9 @@
-# Gramly
+# Squiggle
 
 Write anywhere; mistakes get underlined where you typed them. Hover one to see
 the fix, click **Accept**, or take them all at once.
 
-Gramly is a grammar checker for the text field you already have open - Mail,
+Squiggle is a grammar checker for the text field you already have open - Mail,
 Notes, Slack, a browser, anything that tells macOS what it is showing. Spelling
 and grammar are checked on your Mac by [Harper](https://github.com/Automattic/harper);
 the subtler mistakes go to Gemini 3.5 Flash-Lite through your own
@@ -22,19 +22,19 @@ Linux is supported on Hyprland only; see [Linux](#linux).
 ## Install
 
 ```bash
-git clone https://github.com/Genoux/gramly
-cd gramly && ./packaging/install.sh
+git clone https://github.com/Genoux/gramly squiggle
+cd squiggle && ./packaging/install.sh
 ```
 
 Or download a release tarball, unpack it, and run the same
 `packaging/install.sh` from inside - it uses the binary it finds there instead
 of building one.
 
-That puts **Gramly.app** in `~/Applications`, starts it, and starts it again at
+That puts **Squiggle.app** in `~/Applications`, starts it, and starts it again at
 every login. Nothing is written outside your home directory and nothing needs
 `sudo`.
 
-The first launch asks for Accessibility access: that is how Gramly reads the
+The first launch asks for Accessibility access: that is how Squiggle reads the
 field you are typing in and writes a fix back. Then open the menu bar icon →
 **OpenRouter key…** for AI suggestions, or skip it and keep the on-device
 checks only.
@@ -46,7 +46,7 @@ Updating is `git pull && ./packaging/install.sh`. Removing it is
 
 Hyprland on Wayland, and only Hyprland: Wayland tells an app nothing about
 where other windows or the pointer are, and Hyprland's socket does. On
-another compositor Gramly refuses to install rather than underline nothing.
+another compositor Squiggle refuses to install rather than underline nothing.
 
 | | |
 |---|---|
@@ -54,18 +54,18 @@ another compositor Gramly refuses to install rather than underline nothing.
 | Build | Rust, GTK 4 and `gtk4-layer-shell` (`pacman -S gtk4 gtk4-layer-shell`) |
 
 ```bash
-git clone https://github.com/Genoux/gramly
-cd gramly && ./packaging/install.sh
+git clone https://github.com/Genoux/gramly squiggle
+cd squiggle && ./packaging/install.sh
 ```
 
-That installs `~/.local/bin/gramly` and a systemd user unit that starts with
+That installs `~/.local/bin/squiggle` and a systemd user unit that starts with
 your graphical session; nothing needs `sudo`. The unit relies on the session
 having `WAYLAND_DISPLAY` and `HYPRLAND_INSTANCE_SIGNATURE` in systemd's user
 environment (uwsm does that); the installer checks and tells you if not.
 Removing it is `./packaging/uninstall.sh`.
 
 **Chrome and Electron apps need a flag.** They build no accessibility tree
-unless started with `--force-renderer-accessibility`, so without it Gramly
+unless started with `--force-renderer-accessibility`, so without it Squiggle
 sees no text field in them. The installer offers to add it to
 `~/.config/chrome-flags.conf` and `~/.config/electron-flags.conf`, which
 Chrome and the Arch `electron` packages read, and restart the app afterwards.
@@ -73,7 +73,7 @@ Slack, ChatGPT, Orca and other apps that bundle their own Electron read no
 flag file; add the flag to the `Exec` line of a copy of their `.desktop`
 file in `~/.local/share/applications`.
 
-`gramly doctor` shows what Gramly can see in the field you click into, and
+`squiggle doctor` shows what Squiggle can see in the field you click into, and
 the tray icon has the same menu as the Mac's, except that **Personal
 dictionary…** opens `dictionary.txt` in your text editor.
 
@@ -85,15 +85,15 @@ dictionary…** opens `dictionary.txt` in your text editor.
 | Blue underline | Correct, but could read better |
 | Hover an underline | Your sentence with the fix in place, then **Accept** / **Dismiss** / **Add to dictionary**; **⋯** → **Don't suggest in this field** |
 | Menu bar icon (tray icon on Linux) | Pause (30 minutes to the rest of the day), the fields turned off (to turn back on), AI on/off, spelling, personal dictionary, key |
-| `gramly doctor` | What Gramly can see in the field you click into |
-| `gramly check < file.txt` | The same suggestions, printed |
-| `gramly check --improve < file.txt` | The clearer wording the app proposes, printed |
+| `squiggle doctor` | What Squiggle can see in the field you click into |
+| `squiggle check < file.txt` | The same suggestions, printed |
+| `squiggle check --improve < file.txt` | The clearer wording the app proposes, printed |
 
 Terminals are skipped on purpose, as are password fields.
 
 ## Configuration
 
-`~/.config/gramly/config.toml`, optional, and written by the menu for you:
+`~/.config/squiggle/config.toml`, optional, and written by the menu for you:
 
 ```toml
 ai = true
@@ -102,21 +102,21 @@ openrouter_key = "sk-or-..."
 ```
 
 Your dictionary opens from the menu bar icon → **Personal dictionary…**, and
-lives in `~/.config/gramly/dictionary.txt`, one word per line. A word
+lives in `~/.config/squiggle/dictionary.txt`, one word per line. A word
 in it is never flagged and never changed, by the on-device pass or the AI.
 
 ## Privacy
 
 The on-device pass never leaves the Mac. With AI suggestions on, the paragraph
 you are editing is sent to OpenRouter, which routes it to Anthropic; nothing is
-stored by Gramly. Password fields are never read.
+stored by Squiggle. Password fields are never read.
 
 ## Developing
 
 ```bash
 ./dev            # run from this checkout, restart on save
 cargo test --workspace
-GRAMLY_OPENROUTER_KEY=sk-or-... cargo test -p gramly-core -- --ignored   # live model
+SQUIGGLE_OPENROUTER_KEY=sk-or-... cargo test -p squiggle-core -- --ignored   # live model
 cargo run -- lab          # accept fixes in real text fields, off screen, and audit them
 cargo run -- preview      # draw every card and the dictionary to target/preview, light and dark
 ./sandbox                 # every release check, with a report; --ai, --models, --screen, --all
