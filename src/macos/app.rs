@@ -12,7 +12,8 @@ use crate::surface::{
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, NSObject, NSObjectProtocol};
 use objc2::{
-    ClassType, DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send, sel,
+    AllocAnyThread, ClassType, DefinedClass, MainThreadMarker, MainThreadOnly, Message,
+    define_class, msg_send, sel,
 };
 use objc2_app_kit::{
     NSAlert, NSAlertFirstButtonReturn, NSApplication, NSApplicationActivationPolicy, NSImage,
@@ -20,9 +21,12 @@ use objc2_app_kit::{
     NSWorkspace, NSWorkspaceDidActivateApplicationNotification,
 };
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};
-use objc2_foundation::{NSString, NSTimer, NSURL};
+use objc2_foundation::{NSData, NSString, NSTimer, NSURL};
 use squiggle_core::Config;
 use std::cell::RefCell;
+
+/// Rendered from `assets/brand/menubar.svg` by `assets/brand/build`.
+const MENU_BAR_ICON: &[u8] = include_bytes!("../../assets/brand/generated/menubar@2x.png");
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -381,19 +385,17 @@ fn build_menu(state: &mut State, controller: &Controller, mtm: MainThreadMarker)
     let bar = NSStatusBar::systemStatusBar();
     let item = bar.statusItemWithLength(NSVariableStatusItemLength);
     if let Some(button) = item.button(mtm) {
-        // The system's spell-check symbol, not a logo: the name will change
-        // before there is one. The Linux tray takes the icon theme's
-        // equivalent (tools-check-spelling).
-        let image = NSImage::imageWithSystemSymbolName_accessibilityDescription(
-            &NSString::from_str("text.badge.checkmark"),
-            Some(&NSString::from_str("Squiggle")),
-        );
-        match image {
+        // The mark, as a template image: black on clear, drawn at 2x for 18 x
+        // 16 points, so AppKit colours it for a light or dark menu bar.
+        let data = NSData::with_bytes(MENU_BAR_ICON);
+        match NSImage::initWithData(NSImage::alloc(), &data) {
             Some(image) => {
+                image.setSize(CGSize::new(18.0, 16.0));
                 image.setTemplate(true);
+                image.setAccessibilityDescription(Some(&NSString::from_str("Squiggle")));
                 button.setImage(Some(&image));
             }
-            None => button.setTitle(&NSString::from_str("✓")),
+            None => button.setTitle(&NSString::from_str("Squiggle")),
         }
     }
 

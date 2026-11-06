@@ -20,7 +20,8 @@ use host::LinuxHost;
 use overlay::LayerOverlay;
 use std::cell::RefCell;
 use std::rc::{Rc, Weak};
-use std::sync::mpsc;
+use std::sync::atomic::Ordering;
+use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
 type LinuxEngine = Engine<LinuxHost, LayerOverlay>;
@@ -42,22 +43,27 @@ pub fn run() -> anyhow::Result<()> {
 
     let engine: SharedEngine = Rc::new(RefCell::new(None));
     let clicked = Rc::downgrade(&engine);
-    let overlay = LayerOverlay::new(Rc::new(move |action, index| {
-        // A click that arrives while the engine is mid-tick is dropped, as
-        // on macOS.
-        if let Some(engine) = clicked.upgrade()
-            && let Ok(mut engine) = engine.try_borrow_mut()
-            && let Some(engine) = engine.as_mut()
-        {
-            engine.act(action, index);
-        }
-    }));
+    // Light or dark, for the card and the tray icon alike.
+    let dark = appearance::watch();
+    let overlay = LayerOverlay::new(
+        Arc::clone(&dark),
+        Rc::new(move |action, index| {
+            // A click that arrives while the engine is mid-tick is dropped, as
+            // on macOS.
+            if let Some(engine) = clicked.upgrade()
+                && let Ok(mut engine) = engine.try_borrow_mut()
+                && let Some(engine) = engine.as_mut()
+            {
+                engine.act(action, index);
+            }
+        }),
+    );
     *engine.borrow_mut() = Some(Engine::new(LinuxHost::new(conn, focus), overlay));
 
     let (sender, commands) = mpsc::channel();
     let initial = engine.borrow().as_ref().map(Engine::status);
     let tray = initial.and_then(|status| {
-        tray::spawn(status, sender)
+        tray::spawn(status, dark.load(Ordering::Relaxed), sender)
             .inspect_err(|why| note!("no tray icon: {why:#}"))
             .ok()
     });
@@ -65,7 +71,7 @@ pub fn run() -> anyhow::Result<()> {
     let main_loop = glib::MainLoop::new(None, false);
     let quit = main_loop.clone();
     let shared = Rc::downgrade(&engine);
-    let mut drawn: Option<Status> = None;
+    let mut drawn: Option<(Status, bool)> = None;
     glib::timeout_add_local(TICK, move || {
         if let Ok(mut engine) = engine.try_borrow_mut()
             && let Some(engine) = engine.as_mut()
@@ -74,12 +80,12 @@ pub fn run() -> anyhow::Result<()> {
             commands
                 .try_iter()
                 .for_each(|command| apply(command, engine, &shared, &quit));
-            let status = engine.status();
+            let now = (engine.status(), dark.load(Ordering::Relaxed));
             if let Some(tray) = &tray
-                && drawn.as_ref() != Some(&status)
+                && drawn.as_ref() != Some(&now)
             {
-                tray.show(status.clone());
-                drawn = Some(status);
+                tray.show(now.0.clone(), now.1);
+                drawn = Some(now);
             }
         }
         glib::ControlFlow::Continue

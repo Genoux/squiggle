@@ -721,11 +721,23 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
   card fades by GTK opacity and rises through its own margins, never the
   surface's size; Hyprland's layer animation stays off. The hairline is one
   whole pixel, as GTK borders are, where macOS draws half a point.
-- The menu bar icon is the system's spell-check symbol
-  (`text.badge.checkmark`), not a logo. A drawn mark (a g whose tail is the
-  underline) shipped in 0.2.0 and was taken out: the name will change, and
-  an alpha needs no brand. A Linux tray takes the icon theme's
-  `tools-check-spelling`.
+- The menu bar icon is the mark, Fold (`assets/brand/`): three panels of
+  one strip of paper, the middle one turned away, drawn on a 24 grid with
+  every corner on a whole unit and one angle (1 in 2). The gaps carry the
+  folds, so one drawing serves colour, one colour, the menu bar and a
+  favicon. It replaced `text.badge.checkmark` at the rename; a g whose tail
+  was the underline shipped in 0.2.0 and was taken out. About a dozen
+  rounds were rejected on the way: thin-line marks looked faint beside
+  Linear's or Cursor's, waves belong to LanguageTool (its wavy underline)
+  and Windsurf, a red underline is every grammar app, and serif or swash
+  letters read as trying too hard. The wordmark is Atkinson Hyperlegible
+  Next SemiBold, the app's own font; Newsreader's serifs fought the flat
+  planes. The brand is shown on dark. On macOS the icon is a template image
+  (`menubar@2x.png`, 18 x 16 points); a Linux tray takes raw ARGB32
+  pixels from the binary, in the desktop's light or dark, following the
+  portal as the card does. `assets/brand/build` renders every PNG, the
+  .icns, the .ico and the tray pixels from the SVGs; run it after changing
+  one and commit what it writes.
 - `squiggle preview [dir]` draws every card and the dictionary to PNG in both
   appearances, from the same code, in an off-screen window. Look at it
   before and after changing how they are drawn.

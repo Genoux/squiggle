@@ -15,7 +15,6 @@
 //! Layer surfaces are placed from their output's corner, so every global
 //! rectangle crosses to the output's own coordinates once, here.
 
-use super::appearance;
 use super::card::{self, Built, OnAction};
 use super::hypr::{self, Monitor};
 use crate::surface::{self, Action, Card, Mark, Point, Rect, place_card, theme};
@@ -233,7 +232,7 @@ pub struct LayerOverlay {
 impl LayerOverlay {
     /// `on_action` is what a click on a row calls. The card is a real surface
     /// that gets pointer events, so rows light and click on their own.
-    pub fn new(on_action: OnAction) -> Self {
+    pub fn new(dark: Arc<AtomicBool>, on_action: OnAction) -> Self {
         let provider = gtk::CssProvider::new();
         // Above the user's own gtk.css: a full theme there (matugen's, 300KB)
         // painted every window grey, the whole-screen underline layer
@@ -270,7 +269,7 @@ impl LayerOverlay {
             card,
             shown: None,
             card_area,
-            dark: appearance::watch(),
+            dark,
             styled: None,
             styles: provider,
         };

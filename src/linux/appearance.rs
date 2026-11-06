@@ -4,7 +4,7 @@
 //! reflects a setting an app made for itself and says nothing about the
 //! system. It is followed on a thread of its own, so a slow portal never
 //! stalls the main loop, and read by the card when it is built, as macOS
-//! reads its appearance.
+//! reads its appearance, and by the tray for its icon's colours.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
