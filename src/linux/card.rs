@@ -84,7 +84,7 @@ fn cards_css(p: &Palette) -> String {
     let clear = theme::CLEAR.css();
     let side = theme::BUTTON_SIDE - theme::BUTTON_OUTLINE;
     format!(
-        "window.squiggle {{ background: transparent; box-shadow: none; }}
+        "window.squiggle {{ background: transparent; box-shadow: none; backdrop-filter: none; }}
          .squiggle-card {{ font-family: \"{family}\", sans-serif; background-color: {surface}; border: {edge}px solid {edge_color}; border-radius: {corner}px; box-shadow: {tight}, {soft}; }}
          .squiggle-dot {{ border-radius: {dot_radius}px; }}
          .squiggle-dot.squiggle-mistake {{ background-color: {mistake}; }}
@@ -590,5 +590,12 @@ mod tests {
             assert!(css.contains("font-size: 13.5px; font-weight: 600"));
             assert!(css.contains("line-height: 1.6"));
         }
+    }
+
+    #[test]
+    fn a_theme_cannot_blur_what_squiggle_draws_over() {
+        assert!(css(&theme::DARK).contains(
+            "window.squiggle { background: transparent; box-shadow: none; backdrop-filter: none; }"
+        ));
     }
 }
