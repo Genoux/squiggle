@@ -11,6 +11,8 @@ use atspi_proxies::common::{
 };
 use atspi_proxies::component::ComponentProxyBlocking;
 use atspi_proxies::document::DocumentProxyBlocking;
+use atspi_proxies::hyperlink::HyperlinkProxyBlocking;
+use atspi_proxies::hypertext::HypertextProxyBlocking;
 use atspi_proxies::registry::RegistryProxyBlocking;
 use atspi_proxies::text::TextProxyBlocking;
 use padding::{app_offset, strip_padding};
@@ -354,6 +356,11 @@ pub struct Field {
     /// [`strip_padding`].
     text: RefCell<String>,
     padding: RefCell<Vec<usize>>,
+    /// The blocks the value was read from, one line each, when the field's
+    /// own text is only embedded objects; see [`blocks`]. Empty otherwise.
+    blocks: RefCell<Vec<Rc<Field>>>,
+    /// The block `select` chose, whose caret is put back.
+    chosen: RefCell<Option<Rc<Field>>>,
     /// Whether this is a web field, decided once; see [`Field::is_web`].
     web: OnceCell<bool>,
     /// Set once a write was ignored: fixes are pasted from then on. A field
@@ -388,6 +395,7 @@ macro_rules! proxy {
     };
 }
 
+mod blocks;
 mod padding;
 mod write;
 
@@ -400,6 +408,8 @@ impl Field {
             at: Rc::clone(at),
             text: RefCell::new(String::new()),
             padding: RefCell::new(Vec::new()),
+            blocks: RefCell::new(Vec::new()),
+            chosen: RefCell::new(None),
             web: OnceCell::new(),
             paste_only: Cell::new(false),
             slow_until: Cell::new(None),
@@ -622,12 +632,76 @@ impl Field {
         text.get_text(0, text.character_count().ok()?).ok()
     }
 
-    /// The text without its padding, kept with the padding it removed.
+    /// The text without its padding, kept with the padding it removed; or,
+    /// when the text is only embedded objects, its blocks' texts, one line
+    /// each. A block that does not answer is a miss, not a blank field:
+    /// read as its bare U+FFFC, Slack's box flipped between its 34
+    /// characters and one while its composer was rebuilt, and each flip
+    /// cleared the underlines.
     fn read_value(&self) -> Option<String> {
-        let (text, padding) = strip_padding(&self.raw_text()?);
+        let raw = self.raw_text()?;
+        let blocks = if blocks::only_objects(&raw) {
+            self.text_objects()?
+        } else {
+            Vec::new()
+        };
+        let (text, padding) = if blocks.is_empty() {
+            strip_padding(&raw)
+        } else {
+            let lines = blocks
+                .iter()
+                .map(|block| block.read_value())
+                .collect::<Option<Vec<_>>>()?;
+            (lines.join("\n"), Vec::new())
+        };
         *self.padding.borrow_mut() = padding;
+        *self.blocks.borrow_mut() = blocks;
         *self.text.borrow_mut() = text.clone();
         Some(text)
+    }
+
+    /// The embedded objects that hold text, in order; `None` when the app
+    /// did not answer.
+    // ponytail: every block is read on every poll, a few calls each; a long
+    // document may reach CALL_TIMEOUT. Read only the blocks that changed if so.
+    fn text_objects(&self) -> Option<Vec<Rc<Field>>> {
+        let hypertext = proxy!(self, HypertextProxyBlocking);
+        let objects = (0..hypertext.get_n_links().ok()?)
+            .map(|index| {
+                let link = hypertext.get_link(index).ok()?;
+                let object = proxy!(self, HyperlinkProxyBlocking, link.path_as_str())
+                    .get_object(0)
+                    .ok()?;
+                let block = Field::new(
+                    &self.conn,
+                    object.name_as_str()?,
+                    object.path_as_str(),
+                    &self.at,
+                );
+                let holds_text = proxy!(block, AccessibleProxyBlocking)
+                    .get_interfaces()
+                    .ok()?
+                    .contains(Interface::Text);
+                Some(holds_text.then(|| Rc::new(block)))
+            })
+            .collect::<Option<Vec<_>>>()?;
+        Some(objects.into_iter().flatten().collect())
+    }
+
+    fn has_blocks(&self) -> bool {
+        !self.blocks.borrow().is_empty()
+    }
+
+    /// The block holding `len` characters from `start` of the value last
+    /// read, and where they start in it.
+    fn block_at(&self, start: usize, len: usize) -> Option<(Rc<Field>, usize)> {
+        let blocks = self.blocks.borrow();
+        let lines: Vec<usize> = blocks
+            .iter()
+            .map(|block| block.text.borrow().chars().count())
+            .collect();
+        let (index, local) = blocks::locate(&lines, start, len)?;
+        Some((Rc::clone(&blocks[index]), local))
     }
 
     /// A character's box, in the frame that answered last. A frame that
@@ -686,6 +760,10 @@ impl surface::Field for Field {
     /// is not used: GTK4 answers with the first character's box only and
     /// Gecko with partial or empty ones.
     fn bounds(&self, start: usize, len: usize) -> Option<Rect> {
+        if self.has_blocks() {
+            let (block, local) = self.block_at(start, len)?;
+            return surface::Field::bounds(&*block, local, len);
+        }
         let text = proxy!(self, TextProxyBlocking);
         let padding = self.padding.borrow();
         let character = |offset: usize| {
@@ -701,7 +779,16 @@ impl surface::Field for Field {
     /// that range, holding exactly that text: Gecko applies a selection a
     /// moment late.
     fn select(&self, start: usize, len: usize) -> bool {
-        self.select_range(start, len).unwrap_or(false)
+        if !self.has_blocks() {
+            self.chosen.take();
+            return self.select_range(start, len).unwrap_or(false);
+        }
+        let Some((block, local)) = self.block_at(start, len) else {
+            return false;
+        };
+        let selected = surface::Field::select(&*block, local, len);
+        *self.chosen.borrow_mut() = Some(block);
+        selected
     }
 
     fn still_selected(&self) -> bool {
@@ -714,9 +801,11 @@ impl surface::Field for Field {
 
     /// Writes through `EditableText` where the app honours it. Web fields
     /// are left alone, as on macOS: a direct write in Zen replaced a whole
-    /// sentence with one word. `Ignored` hands them to the paste.
+    /// sentence with one word. So is a field read through its blocks: its
+    /// own offsets count each block as one character. `Ignored` hands them
+    /// to the paste.
     fn replace(&self, start: usize, len: usize, text: &str, before: &str, expected: &str) -> Write {
-        if self.paste_only.get() || self.is_web() {
+        if self.paste_only.get() || self.is_web() || self.has_blocks() {
             return Write::Ignored;
         }
         let outcome = self.write_native(start, len, text, before, expected);

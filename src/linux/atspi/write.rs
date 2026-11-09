@@ -57,21 +57,39 @@ impl Field {
     /// Whether the app still reports the selection `select_range` made, in a
     /// field that still has focus: a field keeps its selection when the user
     /// clicks into another one in the same window, and Ctrl+V would go there.
+    /// The field is asked, not the block: Chromium reports a paragraph of a
+    /// focused field as not focused.
     pub(super) fn selection_holds(&self) -> bool {
+        let focused = || {
+            Some(
+                proxy!(self, AccessibleProxyBlocking)
+                    .get_state()
+                    .ok()?
+                    .contains(State::Focused),
+            )
+        };
+        focused().unwrap_or(false) && self.selection_unchanged()
+    }
+
+    /// Whether the app still reports the selection `select_range` made, here
+    /// or in the block it was made in.
+    fn selection_unchanged(&self) -> bool {
+        if let Some(block) = self.chosen.borrow().as_ref() {
+            return block.selection_unchanged();
+        }
         let held = || {
-            let focused = proxy!(self, AccessibleProxyBlocking)
-                .get_state()
-                .ok()?
-                .contains(State::Focused);
             let text = proxy!(self, TextProxyBlocking);
-            Some(focused && text.get_selection(0).ok()? == self.selected.get()?)
+            Some(text.get_selection(0).ok()? == self.selected.get()?)
         };
         held().unwrap_or(false)
     }
 
     /// Drops the selection and puts the caret where it was before
-    /// `select_range` moved it.
+    /// `select_range` moved it, in the block it was made in if any.
     pub(super) fn put_caret_back(&self) -> Option<()> {
+        if let Some(block) = self.chosen.take() {
+            return block.put_caret_back();
+        }
         let caret = self.caret.take()?;
         self.selected.set(None);
         let text = proxy!(self, TextProxyBlocking);

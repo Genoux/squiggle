@@ -351,6 +351,17 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
   `Collection`, for its focused editable text (5-8ms in Zen, through two
   nested iframes); the walk asks the same first, since a Zen with many
   tabs passed its 5000-node limit.
+- A field whose text is only embedded objects is read through them
+  (`atspi/blocks.rs`). Chromium gives each block of a rich editor one
+  U+FFFC in the field's text and keeps the words in the block: Slack
+  4.53's message box read "\u{fffc}", its paragraph "HIlarius! Maiking
+  SURE hes legit \u{fffc}", and Squiggle saw a blank field and drew
+  nothing. Each object found through `Hypertext` is one line; bounds,
+  the selection and the caret go to the line's block, in its own offsets,
+  and the focus check stays on the field, since Chromium reports the
+  paragraph as not focused. Such a field is always pasted into: its own
+  offsets count a block as one character. A field with any text of its
+  own between the objects is read as before.
 - zbus proxies are built uncached: cached, each one fetches every property
   and subscribes to changes the apps never announce, so values go stale.
 - Every call has a 150ms timeout, as on macOS; zbus's default is 25s.
