@@ -461,7 +461,11 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
 - Squiggle's stylesheet sits one above the user's (`PRIORITY_USER + 1`). A
   matugen theme in `~/.config/gtk-4.0/gtk.css` painted every window, the
   whole-screen underline layer included, a near-opaque grey, and
-  restyled the card's buttons.
+  restyled the card's buttons. A rule Squiggle does not reset still
+  applies: `window.background { backdrop-filter: blur(20px); }` in the
+  user's theme made GTK 4.24 ask Hyprland 0.57 (`ext_background_effect`)
+  to blur what lay behind the underline layer, and Slack's text under it
+  became an unreadable smear. `window.squiggle` resets it.
 - A wrapping label asks for its whole text on one line as its natural
   width, and a layer surface takes its natural size: the sentence card ran
   off its right edge until the label's `max_width_chars` was capped.
