@@ -766,3 +766,5 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
   refuses a tag that disagrees with either. Bump with a `chore: bump version
   to X.Y.Z` commit in the pull request, then tag `vX.Y.Z` on main once it
   has merged. Releases are drafts until someone has run the build.
+
+Every agent follows the shared rules in `.toolkit/RULES.md` (managed by jb-toolkit); deliberate exceptions are in `.jb-exceptions`.
