@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # What a release ships (R9), in dist/.
-#   scripts/build          this platform's bundle and its signature
+#   scripts/build          this platform's bundle, and the signer, compiled
+#   scripts/build --sign   its signature
 #   scripts/build --feed   latest.json, from the signed bundles in dist/
 # The bundle is laid out so packaging/install.sh, unpacked as-is, finds
 # bin/squiggle and skips the build; the app updates by running it.
@@ -32,12 +33,11 @@ PY
   exit 0
 fi
 
-# An installed copy refuses a bundle the key did not sign, so one is never
-# made without it.
-if [ -z "${UPDATER_SIGNING_KEY:-}" ]; then
-  echo "UPDATER_SIGNING_KEY is not set: a bundle is never shipped unsigned" >&2
-  exit 1
-fi
+# Asked rather than assumed, as the installer does: a target-dir in
+# ~/.cargo/config.toml moves the binaries out of the checkout.
+target() {
+  cargo metadata --format-version 1 --no-deps | sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p'
+}
 
 case "$(uname -s)-$(uname -m)" in
   Darwin-arm64) platform=darwin-aarch64 ;;
@@ -47,18 +47,34 @@ case "$(uname -s)-$(uname -m)" in
   *) echo "no bundle for $(uname -s) on $(uname -m)" >&2; exit 1 ;;
 esac
 
-cargo build --release
-# Asked rather than assumed, as the installer does: a target-dir in
-# ~/.cargo/config.toml moves the binaries out of the checkout.
-target="$(cargo metadata --format-version 1 --no-deps | sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p')"
-
 name="squiggle-v$version-$platform"
+
+# Signing is its own step, and the only one given the key: every build
+# script and proc-macro of every dependency runs during a build, and any of
+# them could read a key that was in the environment for it. The signer is
+# compiled by the build and only run here.
+if [ "${1:-}" = --sign ]; then
+  if [ -z "${UPDATER_SIGNING_KEY:-}" ]; then
+    echo "UPDATER_SIGNING_KEY is not set: a bundle is never shipped unsigned" >&2
+    exit 1
+  fi
+  "$(target)/release/examples/sign" "dist/$name.tar.gz"
+  echo "dist/$name.tar.gz.sig"
+  exit 0
+fi
+
+if [ -n "${UPDATER_SIGNING_KEY:-}" ]; then
+  echo "build without UPDATER_SIGNING_KEY set; scripts/build --sign takes it" >&2
+  exit 1
+fi
+
+cargo build --release
+cargo build --release -p squiggle-core --example sign
 rm -rf "dist/$name" && mkdir -p "dist/$name/bin" "dist/$name/assets/brand/generated"
-cp "$target/release/squiggle" "dist/$name/bin/"
+cp "$(target)/release/squiggle" "dist/$name/bin/"
 cp -r packaging "dist/$name/"
 cp assets/brand/generated/Squiggle.icns "dist/$name/assets/brand/generated/"
 cp README.md TROUBLESHOOTING.md LICENSE "dist/$name/"
 tar -czf "dist/$name.tar.gz" -C dist "$name"
 rm -rf "dist/$name"
-cargo run --quiet --release -p squiggle-core --example sign -- "dist/$name.tar.gz"
-echo "dist/$name.tar.gz and its .sig"
+echo "dist/$name.tar.gz, not signed yet"

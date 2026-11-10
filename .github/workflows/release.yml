@@ -50,13 +50,16 @@ jobs:
       - name: Test
         run: cargo test --release --workspace
 
-      # The bundle and its signature (R9). The key never leaves the secrets:
-      # an installed copy refuses a bundle it did not sign.
-      - name: Build and sign
+      - name: Build
+        run: scripts/build
+
+      # The only step given the key, and it compiles nothing: a dependency's
+      # build script could read a key that was there during the build.
+      - name: Sign
         env:
           UPDATER_SIGNING_KEY: ${{ secrets.UPDATER_SIGNING_KEY }}
           UPDATER_SIGNING_KEY_PASSWORD: ${{ secrets.UPDATER_SIGNING_KEY_PASSWORD }}
-        run: scripts/build
+        run: scripts/build --sign
 
       - uses: actions/upload-artifact@v4
         with:
@@ -86,13 +89,16 @@ jobs:
       - name: Test
         run: cargo test --release --workspace
 
-      # The bundle and its signature (R9). The key never leaves the secrets:
-      # an installed copy refuses a bundle it did not sign.
-      - name: Build and sign
+      - name: Build
+        run: scripts/build
+
+      # The only step given the key, and it compiles nothing: a dependency's
+      # build script could read a key that was there during the build.
+      - name: Sign
         env:
           UPDATER_SIGNING_KEY: ${{ secrets.UPDATER_SIGNING_KEY }}
           UPDATER_SIGNING_KEY_PASSWORD: ${{ secrets.UPDATER_SIGNING_KEY_PASSWORD }}
-        run: scripts/build
+        run: scripts/build --sign
 
       - uses: actions/upload-artifact@v4
         with:
