@@ -156,7 +156,9 @@ Optional, when the project has them: `DESIGN.md` (UI system),
 ## R7. Hosting
 
 1. Repos are private on the owner's personal GitHub account unless the owner
-   says otherwise. Never an organisation account without being asked.
+   says otherwise. Never an organisation account without being asked. An
+   app (R9) is public, because installed copies fetch its releases without
+   credentials; making a repo public is still the owner's go-ahead (R1.2).
 2. Merge settings: rebase only, delete branch on merge (`jb new --github`
    sets these; for an existing repo, `gh repo edit --enable-rebase-merge
    --enable-squash-merge=false --enable-merge-commit=false --delete-branch-on-merge`).
@@ -182,3 +184,27 @@ Optional, when the project has them: `DESIGN.md` (UI system),
    `.env.example` lists them (R6.5).
 5. Making a newly published package public is a one-time step in the GitHub
    package settings (the owner's decision, R1.2).
+
+## R9. Apps update themselves
+
+1. An app is anything installed on a machine (desktop app, CLI). It never
+   updates by pulling and rebuilding source: it updates from its repo's
+   latest published GitHub Release, so publishing the draft (R4.3.5) is what
+   ships an update.
+2. `scripts/build` puts in `dist/`, for each platform the app ships to, the
+   bundle, its signature, and one `latest.json` in the
+   [Tauri updater format](https://v2.tauri.app/plugin/updater/#static-json-file)
+   (`version`, `notes`, `pub_date`, `platforms.<os-arch>.{url,signature}`),
+   whatever the stack. URLs point at
+   `https://github.com/<owner>/<repo>/releases/download/vX.Y.Z/<file>`.
+3. The app checks
+   `https://github.com/<owner>/<repo>/releases/latest/download/latest.json`
+   at startup. A desktop app shows "Update available" with an Update button;
+   a CLI prints one line and offers `<app> update`. It verifies the signature
+   against the public key built into it before replacing itself, and never
+   installs an unsigned or unverified update.
+4. The signing key lives only in the repo's Actions secrets
+   `UPDATER_SIGNING_KEY` and `UPDATER_SIGNING_KEY_PASSWORD`; `release.yml`
+   hands them to `scripts/build`. Losing the key strands every installed
+   copy, so the owner keeps a copy in their password manager.
+5. Pre-releases never reach installed apps: `releases/latest` skips them.
