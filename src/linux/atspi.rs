@@ -837,7 +837,7 @@ mod tests {
     #[test]
     fn a_page_is_known_by_its_host() {
         assert_eq!(
-            host_of("https://github.com/Genoux/gramly/pull/7#top").as_deref(),
+            host_of("https://github.com/Genoux/squiggle/pull/7#top").as_deref(),
             Some("github.com")
         );
         assert_eq!(
