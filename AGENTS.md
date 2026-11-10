@@ -736,23 +736,43 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
   card fades by GTK opacity and rises through its own margins, never the
   surface's size; Hyprland's layer animation stays off. The hairline is one
   whole pixel, as GTK borders are, where macOS draws half a point.
-- The menu bar icon is the mark, Fold (`assets/brand/`): three panels of
-  one strip of paper, the middle one turned away, drawn on a 24 grid with
-  every corner on a whole unit and one angle (1 in 2). The gaps carry the
-  folds, so one drawing serves colour, one colour, the menu bar and a
-  favicon. It replaced `text.badge.checkmark` at the rename; a g whose tail
-  was the underline shipped in 0.2.0 and was taken out. About a dozen
-  rounds were rejected on the way: thin-line marks looked faint beside
-  Linear's or Cursor's, waves belong to LanguageTool (its wavy underline)
-  and Windsurf, a red underline is every grammar app, and serif or swash
-  letters read as trying too hard. The wordmark is Atkinson Hyperlegible
-  Next SemiBold, the app's own font; Newsreader's serifs fought the flat
-  planes. The brand is shown on dark. On macOS the icon is a template image
-  (`menubar@2x.png`, 18 x 16 points); a Linux tray takes raw ARGB32
-  pixels from the binary, in the desktop's light or dark, following the
-  portal as the card does. `assets/brand/build` renders every PNG, the
-  .icns, the .ico and the tray pixels from the SVGs; run it after changing
-  one and commit what it writes.
+- The menu bar icon is the mark (`assets/brand/`): a squiggle, the name
+  drawn. One stroke 2 units thick, four half circles of radius 2 joined by
+  straight runs of 2, in a box of 18 by 8, so stroke and gap are equal and
+  the mark is the same turned upside down. Its ends are cut flat, as the
+  font cuts its s, l and u: with round ends they were the only soft
+  terminals beside the word. The wordmark is lowercase "squiggle" in
+  Atkinson Hyperlegible Next SemiBold, the app's own font, as outlines,
+  tracked in by 8 per thousand. In the lockup the mark stands on the
+  baseline at the x-height with the round letters' overshoot (12 font
+  units each way), which makes its stroke 130 font units beside the l's
+  122 stem; the gap to the word and the clear space are 4 units. The
+  straight runs were chosen among 0, 2, 4 and 6 units: 2 is the length at
+  which the stroke matches the font's stem, and longer ones read as a coil
+  or as letters. Beside the word it can still read as "nu". In the app
+  icon the mark is 558 of the tile's 824 wide. At 22 px a unit is one
+  pixel, so the tray's edges land on the pixel grid. It replaced Fold
+  (three panels of a folded strip of paper, 0.5.0), which read as
+  cardboard and sat oddly in a tray; four rounds of an S in a tile were
+  rejected after it as generic. Waves had been ruled out as LanguageTool's
+  (a thin line under its letters LT) and Windsurf's; the owner chose the
+  squiggle knowing that, since it is the name. Before Fold: a g whose
+  tail was the underline shipped in 0.2.0, and `text.badge.checkmark`
+  before the rename. The brand is shown on dark, paper (#F1ECE4) on ink
+  (#1C1A18); the tile's colour was left as it was and is still open. On
+  macOS the icon is a template image (`menubar@2x.png`, 18 x 16 points); a
+  Linux tray takes raw ARGB32 pixels from the binary, in the desktop's
+  light or dark, following the portal as the card does.
+  `assets/brand/build` renders every PNG, the .ico and the tray pixels
+  from the SVGs; run it after changing one and commit what it writes. The
+  .icns needs macOS's `iconutil`: on Linux the build leaves it as it was
+  and says so, and it must be rebuilt on a Mac before a release.
+  Tahoe takes the .icns as it is: on macOS 26.5.2 (2026-11-10) the system's
+  own icon for a bundle holding only this file (`NSWorkspace.icon(forFile:)`,
+  drawn to a PNG) came back fitted to Tahoe's shape with a glass edge on
+  the mark, while a bare triangle beside it was put on the grey square. So
+  no Icon Composer file is shipped; one would add the clear and tinted
+  styles, and needs Xcode's `actool`.
 - `squiggle preview [dir]` draws every card and the dictionary to PNG in both
   appearances, from the same code, in an off-screen window. Look at it
   before and after changing how they are drawn.

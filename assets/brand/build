@@ -1,24 +1,30 @@
 #!/usr/bin/env bash
 # Renders every icon file the app and the site ship from the SVGs beside
 # this script. Run it after changing one of them, and commit what it writes.
-# Needs rsvg-convert and ImageMagick (brew install librsvg imagemagick) and
-# macOS's iconutil for the .icns.
+# Needs rsvg-convert and ImageMagick (brew install librsvg imagemagick). The
+# .icns needs macOS's iconutil: elsewhere it is left as it was, and must be
+# rebuilt on a Mac before a release.
 set -euo pipefail
 cd "$(dirname "$0")"
 out=generated
-rm -rf "$out" && mkdir -p "$out/png" "$out/Squiggle.iconset"
+rm -rf "$out/png" && mkdir -p "$out/png"
 
 # The app icon at every size a Dock, Finder, a site or a package asks for.
 for size in 16 32 48 64 128 256 512 1024; do
   rsvg-convert -w "$size" -h "$size" app-icon.svg -o "$out/png/app-icon-$size.png"
 done
-for size in 16 32 128 256 512; do
-  cp "$out/png/app-icon-$size.png" "$out/Squiggle.iconset/icon_${size}x${size}.png"
-  rsvg-convert -w $((size * 2)) -h $((size * 2)) app-icon.svg \
-    -o "$out/Squiggle.iconset/icon_${size}x${size}@2x.png"
-done
-iconutil -c icns "$out/Squiggle.iconset" -o "$out/Squiggle.icns"
-rm -rf "$out/Squiggle.iconset"
+if command -v iconutil > /dev/null; then
+  mkdir -p "$out/Squiggle.iconset"
+  for size in 16 32 128 256 512; do
+    cp "$out/png/app-icon-$size.png" "$out/Squiggle.iconset/icon_${size}x${size}.png"
+    rsvg-convert -w $((size * 2)) -h $((size * 2)) app-icon.svg \
+      -o "$out/Squiggle.iconset/icon_${size}x${size}@2x.png"
+  done
+  iconutil -c icns "$out/Squiggle.iconset" -o "$out/Squiggle.icns"
+  rm -rf "$out/Squiggle.iconset"
+else
+  echo "no iconutil here: $out/Squiggle.icns was not rebuilt, run this on a Mac" >&2
+fi
 magick "$out"/png/app-icon-{16,32,48,64,128,256}.png "$out/squiggle.ico" < /dev/null
 
 # macOS menu bar: a template image, black on clear, 18 x 16 points drawn at
