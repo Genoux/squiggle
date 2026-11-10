@@ -796,6 +796,14 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
   service came back on the new build nine seconds later. The macOS half
   compiles and has not been run: the first release after this one is its
   test.
+- The installer copies the new binary beside the old one and renames it
+  into place, before nothing else has changed. 0.6.0's installer stopped
+  the service and then copied over the binary: `squiggle update` runs from
+  that binary, the copy failed with "Text file busy", and Squiggle was left
+  stopped (2026-11-10, the first real update, on Linux). The earlier test
+  started the installer from a shell, where nothing was running from it.
+  From the menu the service is stopped first, so the copy would have
+  worked; the command line is the path that broke.
 - Trust is the signature, nothing else (`squiggle_core::update`). The feed
   is Tauri's `latest.json`; a signature is minisign's, the `.sig` file's
   text as it is. The bundle is verified in memory against the key in

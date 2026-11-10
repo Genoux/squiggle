@@ -116,10 +116,15 @@ install_linux() {
     systemctl --user disable --now gramly.service 2>/dev/null || true
     rm -f "$units/gramly.service" "$bin/gramly"
   fi
-  # Stopped before the binary is replaced: copying over a running one fails.
-  systemctl --user stop squiggle.service 2>/dev/null || true
   mkdir -p "$bin" "$units" "$(dirname "$log")"
-  cp "$binary" "$bin/squiggle"
+  # Copied beside, then renamed into place. Copying over a binary that is
+  # running fails ("Text file busy"), and `squiggle update` runs from the
+  # one being replaced: 0.6.0's first update stopped the service, failed
+  # here, and left Squiggle down. A rename replaces it whatever is running,
+  # and the copy comes before the stop, so one that fails changes nothing.
+  cp "$binary" "$bin/squiggle.new"
+  systemctl --user stop squiggle.service 2>/dev/null || true
+  mv -f "$bin/squiggle.new" "$bin/squiggle"
   # %h and %S are systemd's home and state directory, the same paths the
   # menu's "Copy recent log" reads.
   cat > "$units/squiggle.service" <<UNIT
@@ -182,7 +187,9 @@ if [ -f "$agents/dev.genoux.gramly.plist" ] || [ -d "$apps/Gramly.app" ]; then
   rm -rf "$agents/dev.genoux.gramly.plist" "$apps/Gramly.app"
 fi
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources" "$agents" "$(dirname "$log")"
-cp "$binary" "$app/Contents/MacOS/squiggle"
+# Renamed into place, as on Linux: `squiggle update` may be running from it.
+cp "$binary" "$app/Contents/MacOS/squiggle.new"
+mv -f "$app/Contents/MacOS/squiggle.new" "$app/Contents/MacOS/squiggle"
 cp "$repo/assets/brand/generated/Squiggle.icns" "$app/Contents/Resources/Squiggle.icns"
 sed "s/@VERSION@/$version/g" "$repo/packaging/macos/Info.plist" > "$app/Contents/Info.plist"
 # Signed with a local certificate, made once and kept in the login keychain.
