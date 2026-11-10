@@ -9,6 +9,7 @@ pub mod dictionary;
 mod engine;
 mod geometry;
 pub mod menu;
+pub mod skip;
 pub mod theme;
 pub mod write;
 

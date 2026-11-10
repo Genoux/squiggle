@@ -1,6 +1,6 @@
 use super::edit::{self, ANCESTORS};
 use super::hypr::Window;
-use crate::surface::{self, Rect, Write};
+use crate::surface::{self, Rect, Write, skip};
 use atspi_proxies::accessible::AccessibleProxyBlocking;
 use atspi_proxies::application::ApplicationProxyBlocking;
 use atspi_proxies::bus::{BusProxyBlocking, StatusProxyBlocking};
@@ -46,22 +46,12 @@ const FOCUS_EVENT: &str = "object:state-changed:focused";
 const REGISTRY_BUS: &str = "org.a11y.atspi.Registry";
 const ROOT_PATH: &str = "/org/a11y/atspi/accessible/root";
 
-/// Hyprland classes, as macOS's `SKIPPED_APPS` does for bundle ids.
-const SKIPPED_CLASSES: &[&str] = &[
-    "kitty",
-    "foot",
-    "Alacritty",
-    "com.mitchellh.ghostty",
-    "org.wezfurlong.wezterm",
-    "konsole",
-    "gnome-terminal",
-    "org.gnome.Ptyxis",
-];
-
-pub fn terminal(class: &str) -> bool {
-    SKIPPED_CLASSES
-        .iter()
-        .any(|skipped| skipped.eq_ignore_ascii_case(class))
+/// Why Squiggle stays out of `window`: its own, or an app it never reads.
+pub fn skipped(window: &Window) -> Option<String> {
+    if window.pid == std::process::id() {
+        return Some("focus is in Squiggle itself".into());
+    }
+    skip::app(&window.class).map(|kind| format!("{} is {kind}, skipped", window.class))
 }
 
 /// One character's box as an app reported it, and the frame it asked in.
@@ -218,8 +208,8 @@ pub fn explain_focus(
     focus: &Focus,
     window: &Window,
 ) -> Result<(Field, Via), String> {
-    if terminal(&window.class) {
-        return Err(format!("{} is a terminal, skipped", window.class));
+    if let Some(why) = skipped(window) {
+        return Err(why);
     }
     let at = Rc::new(Cell::new(window.at));
     let from_event = focus
@@ -230,8 +220,8 @@ pub fn explain_focus(
         Some(field) => (field, Via::Event),
         None => (walk(conn, window, &at, &AtomicBool::new(false))?, Via::Walk),
     };
-    if field.is_password() {
-        return Err("password field, skipped".into());
+    if let Some(kind) = field.skipped() {
+        return Err(format!("{kind}, skipped"));
     }
     Ok((field, via))
 }
@@ -430,8 +420,17 @@ impl Field {
         }
     }
 
-    pub fn is_password(&self) -> bool {
-        self.role() == Some(Role::PasswordText)
+    /// What the field is, when it is never read: a password field, or one
+    /// whose page says it holds no prose.
+    pub fn skipped(&self) -> Option<&'static str> {
+        if self.role() == Some(Role::PasswordText) {
+            return Some("a password field");
+        }
+        let attributes = proxy!(self, AccessibleProxyBlocking)
+            .get_attributes()
+            .unwrap_or_default();
+        let named = |key: &str| attributes.get(key).map_or("", String::as_str);
+        skip::field(named("xml-roles"), named("text-input-type"), named("class"))
     }
 
     /// Makes `call` unless this field is cooling down, and starts the
@@ -936,16 +935,6 @@ mod tests {
                 h: 24.0
             })
         );
-    }
-
-    #[test]
-    fn terminals_are_skipped_whatever_their_case() {
-        assert!(terminal("kitty"));
-        assert!(terminal("Alacritty"));
-        assert!(terminal("alacritty"));
-        assert!(terminal("org.gnome.Ptyxis"));
-        assert!(!terminal("zen"));
-        assert!(!terminal("kitty-notes"));
     }
 
     #[test]

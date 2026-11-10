@@ -653,8 +653,23 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
   ChatGPT's empty box in Zen reads "Ask ChatGPT\n" with no
   `AXPlaceholderValue`, the same words in `AXDescription`, and Squiggle
   underlined it. The labels are read once per field, not every poll.
-- Terminals are skipped by bundle id, password fields by role. Both are
-  deliberate and both are what Grammarly does.
+- Where Squiggle never reads is decided once, for both platforms
+  (`surface/skip.rs`): apps by bundle id or Hyprland class (terminals,
+  password managers, code editors), password fields by role, and fields
+  whose page says they hold no prose. Grammarly and LanguageTool publish no
+  such list. Password managers are skipped whole: a secure note or a
+  username is a plain text field, and what Squiggle reads goes to the
+  model. Zen's address bar reads as `xml-roles` `combobox` and was checked
+  until then; Slack's "Find a conversation" is a `searchbox`, its message
+  box a `textbox` (class `ql-editor`), still read. Email, URL, phone,
+  number and search inputs (`text-input-type`) and web code editors, by
+  the class on the element taking keys (CodeMirror's `cm-content`,
+  Monaco's `inputarea`, Ace's `ace_text-input`), are skipped. A page's own
+  opt-outs (`spellcheck="false"`, `data-gramm`, `data-lt-active`) are not:
+  neither Gecko nor Chromium passes them to AT-SPI. macOS reads
+  `AXComboBox`, `AXSearchField` and `AXDOMClassList` for the same rule,
+  not yet tried on a Mac. Squiggle's own windows are skipped by pid, as
+  macOS already did.
 - The Accessibility grant is tied to the signature's designated requirement.
   Ad hoc, that requirement is the build's hash, so every install lost the
   grant. Install now signs with a "Squiggle Local Signing" certificate it makes
