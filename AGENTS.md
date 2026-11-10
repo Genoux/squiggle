@@ -829,7 +829,10 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
   way with nothing to install and no password prompt to script. The app
   verifies with `minisign-verify`, which has no dependencies. Downloads go
   through curl, as the model calls do.
-- Checked at start and daily after: a tray app can run for weeks. A check
+- Checked at start and every six hours after: a tray app can run for
+  weeks. A pre-release build does not read the feed, and its menu says
+  so: the feed is the latest stable release, and following it moved an
+  experimental install to stable without asking. A check
   that fails is tried again in 15 minutes, since at login the network is
   often not up yet; before the first release with a feed that is a 404 in
   the log each time. One install runs at a time: a second click emptied

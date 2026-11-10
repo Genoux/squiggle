@@ -66,6 +66,13 @@ pub fn newer(candidate: &str, running: &str) -> bool {
     }
 }
 
+/// Whether a build of `running` reads the feed. The feed is the latest
+/// published release, which is never a pre-release, so a pre-release build
+/// following it would be moved to the stable channel without being asked.
+pub fn follows_releases(running: &str) -> bool {
+    !running.contains('-')
+}
+
 /// The release the feed offers a build of `running` on `platform`, if it is
 /// newer and has a bundle for it.
 pub fn offered(feed: &str, running: &str, platform: &str) -> Result<Option<Release>> {
@@ -137,6 +144,13 @@ mod tests {
         assert!(!newer("1.0.0-rc.1", "1.0.0"));
         assert!(!newer("latest", "0.5.0"));
         assert!(!newer("0.6", "0.5.0"));
+    }
+
+    #[test]
+    fn only_a_release_build_follows_the_feed() {
+        assert!(follows_releases("0.6.1"));
+        assert!(!follows_releases("0.7.0-experimental.2"));
+        assert!(!follows_releases("1.0.0-rc.1"));
     }
 
     #[test]

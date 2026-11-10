@@ -8,6 +8,7 @@
 
 use super::{DIALECTS, PAUSES, Status};
 use squiggle_core::router::Blocked;
+use squiggle_core::update;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Command {
@@ -60,11 +61,19 @@ fn action(label: impl Into<String>, command: Command) -> Item {
     }
 }
 
+/// The name and version, and for a pre-release build why no update will
+/// ever show: it does not read the feed.
+fn about(version: &str) -> Vec<Item> {
+    let mut items = vec![Item::Note(format!("Squiggle {version}"))];
+    if !update::follows_releases(version) {
+        items.push(Item::Note("Pre-release: updates are not offered".into()));
+    }
+    items.push(Item::Separator);
+    items
+}
+
 pub fn menu(status: &Status) -> Vec<Item> {
-    let mut items = vec![
-        Item::Note(concat!("Squiggle ", env!("CARGO_PKG_VERSION")).into()),
-        Item::Separator,
-    ];
+    let mut items = about(env!("CARGO_PKG_VERSION"));
     if let Some(version) = &status.update {
         items.push(Item::Note(format!("Update available: {version}")));
         items.push(action("Update and restart", Command::Update));
@@ -175,6 +184,18 @@ mod tests {
                 Item::Separator => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn a_pre_release_build_says_it_gets_no_updates() {
+        assert_eq!(
+            labels(&about("0.7.0-experimental.2")),
+            [
+                "Squiggle 0.7.0-experimental.2",
+                "Pre-release: updates are not offered"
+            ]
+        );
+        assert_eq!(labels(&about("0.6.1")), ["Squiggle 0.6.1"]);
     }
 
     #[test]
