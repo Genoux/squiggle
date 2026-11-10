@@ -821,9 +821,11 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
   that fails is tried again in 15 minutes, since at login the network is
   often not up yet; before the first release with a feed that is a 404 in
   the log each time. One install runs at a time: a second click emptied
-  the folder the first installer was running from. If Squiggle is still
-  there two minutes after an installer started, it failed before stopping
-  Squiggle, and Update works again.
+  the folder the first installer was running from. The app waits for the
+  installer; it is stopped while it waits, so if the wait ends the
+  installer failed without replacing Squiggle, and Update works again. A
+  two-minute timer was tried first and could reopen the race under a slow
+  installer.
 - `scripts/build` makes this platform's bundle in `dist/`, `--sign` its
   signature, and `--feed` writes `latest.json` from the signatures there.
   The release workflow builds on macOS and in Arch, then one job writes the

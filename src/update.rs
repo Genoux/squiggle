@@ -27,8 +27,6 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 const EVERY: Duration = Duration::from_secs(24 * 60 * 60);
 /// After a check that failed: at login the network is often not up yet.
 const RETRY: Duration = Duration::from_secs(15 * 60);
-/// An installer that works has stopped Squiggle long before this.
-const INSTALLER_GONE: Duration = Duration::from_secs(120);
 
 fn fetch(url: &str) -> Result<Vec<u8>> {
     let output = Command::new("curl")
@@ -88,34 +86,51 @@ fn unpack(bundle: &[u8], into: &Path) -> Result<PathBuf> {
 }
 
 /// Started outside this process's unit or process group: the installer
-/// stops Squiggle, and would otherwise be stopped with it.
+/// stops Squiggle, and would otherwise be stopped with it. Waited for: the
+/// running app is stopped while it waits, so coming back at all means the
+/// installer is over, and `squiggle update` learns how it went.
 #[cfg(target_os = "linux")]
 fn run_installer(script: &Path) -> Result<()> {
     let unit = format!("squiggle-update-{}", std::process::id());
     let status = Command::new("systemd-run")
-        .args(["--user", "--collect", "--quiet", "--unit", &unit, "bash"])
+        .args([
+            "--user",
+            "--collect",
+            "--quiet",
+            "--wait",
+            "--unit",
+            &unit,
+            "bash",
+        ])
         .arg(script)
         .status()
         .context("systemd-run is not installed")?;
-    ensure!(status.success(), "the installer could not be started");
+    ensure!(
+        status.success(),
+        "the installer failed; see `journalctl --user -u {unit}`"
+    );
     Ok(())
 }
 
 #[cfg(target_os = "macos")]
 fn run_installer(script: &Path) -> Result<()> {
     use std::os::unix::process::CommandExt;
-    Command::new("bash")
+    let status = Command::new("bash")
         .arg(script)
         .stdin(Stdio::null())
         .process_group(0)
-        .spawn()
+        .status()
         .context("the installer could not be started")?;
+    ensure!(
+        status.success(),
+        "the installer failed; its output is in the log"
+    );
     Ok(())
 }
 
 /// Downloads `release`, and installs it only if Squiggle's key signed it and
-/// it is the version the feed said. Returns once the installer has started;
-/// the installer restarts Squiggle.
+/// it is the version the feed said. Returns when the installer is done; in
+/// the running app it does not return, since the installer restarts it.
 pub fn install(release: &Release) -> Result<()> {
     let bundle = fetch(&release.url)?;
     update::verify(&bundle, &release.signature)?;
@@ -142,15 +157,10 @@ pub fn install_from_menu(release: Release) {
         return;
     }
     thread::spawn(move || {
-        match install(&release) {
-            Ok(()) => {
-                note!("installing {}", release.version);
-                // Still here after this long, the installer failed before
-                // stopping Squiggle; the menu's Update must work again.
-                thread::sleep(INSTALLER_GONE);
-                note!("the installer did not replace Squiggle; see its output");
-            }
-            Err(err) => note!("update not installed: {err:#}"),
+        // Reached only when the installer is over and Squiggle was not
+        // replaced, so the menu's Update works again.
+        if let Err(err) = install(&release) {
+            note!("update not installed: {err:#}");
         }
         INSTALLING.store(false, Ordering::SeqCst);
     });
@@ -187,7 +197,7 @@ pub fn run() -> Result<()> {
         Some(release) => {
             println!("Installing Squiggle {}…", release.version);
             install(&release)?;
-            println!("Squiggle restarts when the installer is done.");
+            println!("Squiggle {} is installed and running.", release.version);
         }
     }
     Ok(())
