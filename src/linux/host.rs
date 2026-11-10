@@ -176,7 +176,7 @@ impl LinuxHost {
 }
 
 fn classify(field: Field) -> Target {
-    if field.is_password() {
+    if field.skipped().is_some() {
         Target::Other
     } else {
         Target::Field(field.source())
@@ -220,7 +220,7 @@ impl Host for LinuxHost {
             .window
             .as_ref()
             .is_some_and(|held| held.address != window.address);
-        if atspi::terminal(&window.class) {
+        if atspi::skipped(&window).is_some() {
             return surface::Focus::Elsewhere;
         }
         let decided_from = (self.focus.latest(), window.address.clone());

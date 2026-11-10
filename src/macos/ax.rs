@@ -6,7 +6,7 @@
 //! messaging timeout and every caller treats "no answer" as "no field".
 
 use crate::surface::write::{classify, read_back, settle};
-use crate::surface::{self, Field as _, Focus, Rect, Write};
+use crate::surface::{self, Field as _, Focus, Rect, Write, skip};
 use objc2_app_kit::NSRunningApplication;
 use objc2_application_services::{AXError, AXUIElement, AXValue, AXValueType};
 use objc2_core_foundation::{
@@ -20,21 +20,6 @@ use std::ptr::NonNull;
 /// Long enough for a busy Electron app to answer, short enough that a hung
 /// one costs a skipped frame rather than a frozen menu bar.
 const MESSAGING_TIMEOUT: f32 = 0.15;
-
-/// Apps whose "text area" is a terminal's scrollback. Correcting a shell
-/// command is never what was meant, and Grammarly skips them for the same
-/// reason.
-const SKIPPED_APPS: &[&str] = &[
-    "com.apple.Terminal",
-    "com.googlecode.iterm2",
-    "com.mitchellh.ghostty",
-    "net.kovidgoyal.kitty",
-    "org.alacritty",
-    "com.github.wez.wezterm",
-    "dev.warp.Warp-Stable",
-    "co.zeit.hyper",
-    "com.stablyai.orca",
-];
 
 /// Gecko browsers. They ignore `AXManualAccessibility` and build their tree
 /// on `AXEnhancedUserInterface`, the attribute VoiceOver sets (see `wake`).
@@ -257,7 +242,7 @@ pub fn frontmost_window_title() -> Option<String> {
 /// set.
 pub fn wake(pid: i32) {
     let bundle = bundle_id(pid);
-    if SKIPPED_APPS.contains(&bundle.as_str()) {
+    if skip::app(&bundle).is_some() {
         return;
     }
     let app = unsafe { AXUIElement::new_application(pid) };
@@ -311,8 +296,8 @@ fn examine_focus(current: Option<&Field>) -> Result<Option<Field>, (bool, String
         return Err((true, "focus is in Squiggle itself".into()));
     }
     let app = bundle_id(pid);
-    if SKIPPED_APPS.contains(&app.as_str()) {
-        return Err((true, format!("{app} is a terminal, skipped on purpose")));
+    if let Some(kind) = skip::app(&app) {
+        return Err((true, format!("{app} is {kind}, skipped on purpose")));
     }
 
     // Every element has a role; none back means the app did not answer.
@@ -321,6 +306,14 @@ fn examine_focus(current: Option<&Field>) -> Result<Option<Field>, (bool, String
     let subrole = string_attribute(&element, "AXSubrole").unwrap_or_default();
     if role == "AXSecureTextField" || subrole == "AXSecureTextField" {
         return Err((true, "a password field, never read".into()));
+    }
+    let aria = match (role.as_str(), subrole.as_str()) {
+        ("AXComboBox", _) => "combobox",
+        ("AXSearchField", _) | (_, "AXSearchField") => "searchbox",
+        _ => "",
+    };
+    if let Some(kind) = skip::field(aria, "", &dom_classes(&element)) {
+        return Err((true, format!("{app}: {kind}, skipped on purpose")));
     }
     // Browsers and Electron report a contenteditable as an AXGroup or
     // AXWebArea that is still editable; the settable value is what says so.
@@ -1233,6 +1226,24 @@ pub fn find(pid: i32, window: Option<&str>, id: &str) -> Option<Field> {
         }
     }
     None
+}
+
+/// A web element's classes, space-separated, as `AXDOMClassList` lists them.
+fn dom_classes(element: &AXUIElement) -> String {
+    let Some(list) = attribute(element, "AXDOMClassList") else {
+        return String::new();
+    };
+    let Some(array) = list.downcast_ref::<objc2_core_foundation::CFArray>() else {
+        return String::new();
+    };
+    (0..array.count())
+        .filter_map(|i| {
+            let item = unsafe { &*(array.value_at_index(i) as *const CFType) };
+            item.downcast_ref::<CFString>()
+                .map(|class| class.to_string())
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn children_of(element: &AXUIElement) -> Vec<CFRetained<AXUIElement>> {
