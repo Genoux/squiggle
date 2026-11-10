@@ -58,7 +58,9 @@ pub fn run() -> anyhow::Result<()> {
             }
         }),
     );
-    *engine.borrow_mut() = Some(Engine::new(LinuxHost::new(conn, focus), overlay));
+    let mut started = Engine::new(LinuxHost::new(conn, focus), overlay);
+    started.watch_updates(crate::update::watch());
+    *engine.borrow_mut() = Some(started);
 
     let (sender, commands) = mpsc::channel();
     let initial = engine.borrow().as_ref().map(Engine::status);
@@ -130,6 +132,11 @@ fn apply(
             dictionary::show(move || with_engine(&shared, LinuxEngine::recheck));
         }
         Command::CopyLog => actions::copy_recent_log(),
+        Command::Update => {
+            if let Some(release) = engine.update() {
+                crate::update::install_from_menu(release);
+            }
+        }
         Command::GrantAccess => {}
         Command::Quit => main_loop.quit(),
     }

@@ -22,7 +22,7 @@ Linux is supported on Hyprland only; see [Linux](#linux).
 ## Install
 
 ```bash
-git clone https://github.com/Genoux/gramly squiggle
+git clone https://github.com/Genoux/squiggle
 cd squiggle && ./packaging/install.sh
 ```
 
@@ -39,7 +39,10 @@ field you are typing in and writes a fix back. Then open the menu bar icon →
 **OpenRouter key…** for AI suggestions, or skip it and keep the on-device
 checks only.
 
-Updating is `git pull && ./packaging/install.sh`. Removing it is
+Squiggle updates itself. When a newer release is published the menu shows
+"Update available" with "Update and restart"; `squiggle update` does the same
+from a terminal. The download is installed only if Squiggle's own key signed
+it. Removing it is
 `./packaging/uninstall.sh`, which leaves your settings and dictionary alone.
 
 ## Linux
@@ -54,7 +57,7 @@ another compositor Squiggle refuses to install rather than underline nothing.
 | Build | Rust, GTK 4 and `gtk4-layer-shell` (`pacman -S gtk4 gtk4-layer-shell`) |
 
 ```bash
-git clone https://github.com/Genoux/gramly squiggle
+git clone https://github.com/Genoux/squiggle
 cd squiggle && ./packaging/install.sh
 ```
 
@@ -110,6 +113,9 @@ in it is never flagged and never changed, by the on-device pass or the AI.
 The on-device pass never leaves the Mac. With AI suggestions on, the paragraph
 you are editing is sent to OpenRouter, which routes it to Anthropic; nothing is
 stored by Squiggle. Password fields are never read.
+
+Once a day Squiggle asks GitHub whether a newer release exists. Nothing about
+you or your text is sent with that.
 
 ## Developing
 

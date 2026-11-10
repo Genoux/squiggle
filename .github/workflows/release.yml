@@ -14,8 +14,6 @@ env:
 jobs:
   macos:
     runs-on: macos-latest
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -53,22 +51,75 @@ jobs:
       - name: Test
         run: cargo test --release --workspace
 
-      - name: Build
-        run: cargo build --release
+      # The bundle and its signature (R9). The key never leaves the secrets:
+      # an installed copy refuses a bundle it did not sign.
+      - name: Build and sign
+        env:
+          UPDATER_SIGNING_KEY: ${{ secrets.UPDATER_SIGNING_KEY }}
+          UPDATER_SIGNING_KEY_PASSWORD: ${{ secrets.UPDATER_SIGNING_KEY_PASSWORD }}
+        run: scripts/build
 
-      # Laid out so packaging/install.sh, unpacked as-is, finds bin/squiggle and
-      # skips the build.
-      - name: Package
-        run: |
-          name="squiggle-${GITHUB_REF_NAME}-aarch64-macos"
-          mkdir -p "$name/bin"
-          cp target/release/squiggle "$name/bin/"
-          cp -r packaging "$name/"
-          mkdir -p "$name/assets/brand/generated"
-          cp assets/brand/generated/Squiggle.icns "$name/assets/brand/generated/"
-          cp README.md TROUBLESHOOTING.md LICENSE "$name/"
-          tar czf "$name.tar.gz" "$name"
-          shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bundle-macos
+          path: dist/
+          if-no-files-found: error
+
+  # In Arch, as in CI: the platform the Linux surface is built and measured
+  # on, and the one with gtk4-layer-shell as a package.
+  linux:
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      - name: System packages
+        run: pacman -Syu --noconfirm --needed base-devel git gtk4 gtk4-layer-shell rustup
+
+      - uses: actions/checkout@v4
+
+      - name: Rust
+        run: rustup toolchain install --profile minimal
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: build-linux
+          save-if: false
+
+      - name: Test
+        run: cargo test --release --workspace
+
+      # The bundle and its signature (R9). The key never leaves the secrets:
+      # an installed copy refuses a bundle it did not sign.
+      - name: Build and sign
+        env:
+          UPDATER_SIGNING_KEY: ${{ secrets.UPDATER_SIGNING_KEY }}
+          UPDATER_SIGNING_KEY_PASSWORD: ${{ secrets.UPDATER_SIGNING_KEY_PASSWORD }}
+        run: scripts/build
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bundle-linux
+          path: dist/
+          if-no-files-found: error
+
+  # One draft holding every platform's bundle and signature and the feed
+  # that names them. Publishing it is what offers the update to installed
+  # copies: they read the latest published release's latest.json.
+  draft:
+    needs: [macos, linux]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: bundle-*
+          merge-multiple: true
+
+      - name: Feed
+        run: scripts/build --feed
 
       - name: Draft the release
         env:
@@ -90,4 +141,4 @@ jobs:
             $prerelease \
             --title "$GITHUB_REF_NAME" \
             --generate-notes \
-            squiggle-*.tar.gz squiggle-*.tar.gz.sha256
+            dist/*

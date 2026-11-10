@@ -18,9 +18,11 @@ use super::{Field, Focus, Host, Mark, Overlay, Rect, update_config};
 use squiggle_core::diff::{Piece, pieces};
 use squiggle_core::off::Place;
 use squiggle_core::router::{self, Blocked};
+use squiggle_core::update::Release;
 use squiggle_core::worker::{Outcome, Worker};
 use squiggle_core::{Config, Fix, Kind, config, merge, rebase, sentence};
 use std::collections::{HashMap, HashSet};
+use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
 
 /// 50ms: hover is a poll of the pointer, so this is the card's worst-case
@@ -96,6 +98,8 @@ pub struct Status {
     /// The names of the fields turned off from a card, saved ones first.
     pub off: Vec<String>,
     pub dialect: String,
+    /// The version of a newer release, once one is found.
+    pub update: Option<String>,
 }
 
 pub struct Engine<H: Host, O: Overlay> {
@@ -172,6 +176,10 @@ pub struct Engine<H: Host, O: Overlay> {
     here_off: bool,
     /// The last snapshot written for `SQUIGGLE_STATE`.
     exported: Option<String>,
+    /// Where the platform's update check sends what it finds. Not started
+    /// here: an engine under test must not reach the network.
+    updates: Option<Receiver<Release>>,
+    update: Option<Release>,
 }
 
 impl<H: Host, O: Overlay> Engine<H, O> {
@@ -217,10 +225,28 @@ impl<H: Host, O: Overlay> Engine<H, O> {
             here: None,
             here_off: false,
             exported: None,
+            updates: None,
+            update: None,
         }
     }
 
+    pub fn watch_updates(&mut self, updates: Receiver<Release>) {
+        self.updates = Some(updates);
+    }
+
+    /// The newer release found, for the menu's Update to install.
+    pub fn update(&self) -> Option<Release> {
+        self.update.clone()
+    }
+
     pub fn tick(&mut self) {
+        if let Some(release) = self
+            .updates
+            .as_ref()
+            .and_then(|updates| updates.try_recv().ok())
+        {
+            self.update = Some(release);
+        }
         self.poll();
         self.export();
     }
@@ -247,6 +273,7 @@ impl<H: Host, O: Overlay> Engine<H, O> {
                 .chain(self.off_now.iter().map(|(_, name)| name.clone()))
                 .collect(),
             dialect: self.config.dialect.clone(),
+            update: self.update.as_ref().map(|release| release.version.clone()),
         }
     }
 

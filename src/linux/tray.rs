@@ -159,6 +159,7 @@ mod tests {
             blocked: None,
             off: Vec::new(),
             dialect: "british".into(),
+            update: None,
         }
     }
 

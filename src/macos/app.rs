@@ -208,6 +208,11 @@ impl Controller {
                     .show(target, mtm);
             }),
             Command::CopyLog => copy_recent_log(self.mtm()),
+            Command::Update => self.update(|engine| {
+                if let Some(release) = engine.update() {
+                    crate::update::install_from_menu(release);
+                }
+            }),
             Command::GrantAccess => grant_access(),
             Command::Quit => NSApplication::sharedApplication(self.mtm()).terminate(None),
         }
@@ -458,6 +463,7 @@ pub fn run() -> anyhow::Result<()> {
         commands: Vec::new(),
         dictionary: None,
     };
+    state.engine.watch_updates(crate::update::watch());
     build_menu(&mut state, &controller, mtm);
     *controller.ivars().state.borrow_mut() = Some(state);
 
