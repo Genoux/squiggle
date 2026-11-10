@@ -19,6 +19,8 @@ mod linux;
 mod macos;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 mod surface;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+mod update;
 
 use anyhow::{Result, bail};
 use squiggle_core::{Config, Local, ai, config, improve, protect};
@@ -43,6 +45,8 @@ fn main() -> Result<()> {
         Some("lab-host") => macos::lab_host(),
         #[cfg(target_os = "macos")]
         Some("preview") => macos::preview(&args[1..]),
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        Some("update") => update::run(),
         Some("--version" | "-V") => {
             println!("squiggle {}", env!("CARGO_PKG_VERSION"));
             Ok(())
@@ -56,6 +60,7 @@ fn main() -> Result<()> {
                  squiggle doctor     what Squiggle can see in the focused field\n\
                  squiggle lab        audit accepting fixes in real text fields, off screen (macOS)\n\
                  squiggle preview [dir]   draw every card and the dictionary to PNG (macOS)\n\
+                 squiggle update     install the latest release, if it is newer\n\
                  squiggle --version"
             );
             Ok(())

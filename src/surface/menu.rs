@@ -25,6 +25,8 @@ pub enum Command {
     Spelling(usize),
     Dictionary,
     CopyLog,
+    /// Only offered while `Status::update` names a release.
+    Update,
     /// Only offered while untrusted, which only macOS can be.
     GrantAccess,
     Quit,
@@ -63,6 +65,11 @@ pub fn menu(status: &Status) -> Vec<Item> {
         Item::Note(concat!("Squiggle ", env!("CARGO_PKG_VERSION")).into()),
         Item::Separator,
     ];
+    if let Some(version) = &status.update {
+        items.push(Item::Note(format!("Update available: {version}")));
+        items.push(action("Update and restart", Command::Update));
+        items.push(Item::Separator);
+    }
     if !status.trusted {
         items.push(action("Grant Accessibility access…", Command::GrantAccess));
     }
@@ -153,6 +160,7 @@ mod tests {
             blocked: None,
             off: Vec::new(),
             dialect: "british".into(),
+            update: None,
         }
     }
 
@@ -167,6 +175,21 @@ mod tests {
                 Item::Separator => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn a_newer_release_is_offered_under_the_name_and_only_then() {
+        let offered = with(|status| status.update = Some("0.6.0".into()));
+        assert_eq!(
+            labels(&offered)[..3],
+            [
+                concat!("Squiggle ", env!("CARGO_PKG_VERSION")),
+                "Update available: 0.6.0",
+                "Update and restart"
+            ]
+        );
+        assert!(offered.contains(&action("Update and restart", Command::Update)));
+        assert!(!labels(&menu(&status())).contains(&"Update and restart"));
     }
 
     fn with(change: impl FnOnce(&mut Status)) -> Vec<Item> {

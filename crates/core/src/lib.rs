@@ -14,6 +14,7 @@ pub mod local;
 pub mod off;
 pub mod protect;
 pub mod router;
+pub mod update;
 pub mod worker;
 
 pub use config::Config;

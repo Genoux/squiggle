@@ -777,6 +777,51 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
   appearances, from the same code, in an off-screen window. Look at it
   before and after changing how they are drawn.
 
+## Updating
+
+- An installed Squiggle updates from the latest published GitHub Release,
+  never by pulling and rebuilding (jb-toolkit R9). The repository is public
+  for that reason: a private release needs a token, and a token inside an
+  app is a leak.
+- The update is the release bundle, and installing it is running the
+  bundle's own `packaging/install.sh` (`src/update.rs`). The installer
+  stays the only place that knows how Squiggle is installed: a second copy
+  of "stop, replace, sign, restart" in Rust would drift from it, and on
+  macOS the signing with the local certificate is the part that keeps the
+  Accessibility grant.
+- The installer stops Squiggle, so it is started outside it: on Linux as a
+  transient unit (`systemd-run --user`), since stopping `squiggle.service`
+  ends everything in its cgroup; on macOS in a process group of its own.
+  Linux was run this way on 2026-11-10 from a real signed bundle: the
+  service came back on the new build nine seconds later. The macOS half
+  compiles and has not been run: the first release after this one is its
+  test.
+- Trust is the signature, nothing else (`squiggle_core::update`). The feed
+  is Tauri's `latest.json`; a signature is minisign's, the `.sig` file's
+  text as it is. The bundle is verified in memory against the key in
+  `packaging/updater.pub`, and those same bytes are unpacked, never a file
+  read back. The unpacked binary must then report the version the feed
+  named: a signed older bundle offered as a newer one would put a fixed
+  bug back. The download address must be one of Squiggle's releases, which
+  is tidiness, not security.
+- The private key is in the repository's Actions secrets
+  (`UPDATER_SIGNING_KEY`, `UPDATER_SIGNING_KEY_PASSWORD`) and the owner's
+  password manager, nowhere else. Losing it strands every installed copy:
+  they refuse anything it did not sign. `scripts/build` refuses to make a
+  bundle without it.
+- Signing is a Rust example (`crates/core/examples/sign.rs`, the `minisign`
+  crate as a dev-dependency), so the macOS and Arch runners sign the same
+  way with nothing to install and no password prompt to script. The app
+  verifies with `minisign-verify`, which has no dependencies. Downloads go
+  through curl, as the model calls do.
+- Checked at start and daily after: a tray app can run for weeks. Before
+  the first release with a feed the check logs a 404 once a day.
+- `scripts/build` makes this platform's bundle and signature in `dist/`;
+  `scripts/build --feed` writes `latest.json` from the signatures there.
+  The release workflow builds on macOS and in Arch, then one job writes the
+  feed and drafts the release. Publishing the draft is what ships: installed
+  copies read `releases/latest`, which skips drafts and pre-releases.
+
 ## Repository
 
 - The git history carries no agent attribution: no `Co-authored-by:` trailers,
@@ -787,8 +832,9 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
   to `~/.config/squiggle` on first start so settings, the dictionary and
   fields turned off survive the update; the installer, which removes the
   old LaunchAgent and `Gramly.app` (or `gramly.service` and its binary)
-  so two apps do not draw two sets of underlines; and the GitHub URL until
-  the repository is renamed. The new bundle id means macOS asks for
+  so two apps do not draw two sets of underlines. The repository was
+  renamed to `squiggle` and made public on 2026-11-10, when the updater
+  needed an address to build in. The new bundle id means macOS asks for
   Accessibility again once.
 - main only moves through pull requests. GitHub refuses a direct push to
   it, admins included (branch protection), and a pull request merges only
