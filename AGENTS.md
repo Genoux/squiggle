@@ -804,6 +804,10 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
   started the installer from a shell, where nothing was running from it.
   From the menu the service is stopped first, so the copy would have
   worked; the command line is the path that broke.
+  0.6.1 carries the fix: `squiggle update` took this workstation from
+  0.6.0 to 0.6.1 the same day, the service back on the new build in
+  seconds. The menu's Update and the macOS path are still to be seen
+  working.
 - Trust is the signature, nothing else (`squiggle_core::update`). The feed
   is Tauri's `latest.json`; a signature is minisign's, the `.sig` file's
   text as it is. The bundle is verified in memory against the key in
