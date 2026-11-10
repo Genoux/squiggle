@@ -22,9 +22,9 @@ use std::{
 };
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
-/// Checked at start and then daily: a tray app can run for weeks between
-/// logins.
-const EVERY: Duration = Duration::from_secs(24 * 60 * 60);
+/// Checked at start and then every few hours: a tray app can run for weeks
+/// between logins.
+const EVERY: Duration = Duration::from_secs(6 * 60 * 60);
 /// After a check that failed: at login the network is often not up yet.
 const RETRY: Duration = Duration::from_secs(15 * 60);
 
@@ -166,9 +166,13 @@ pub fn install_from_menu(release: Release) {
     });
 }
 
-/// Sends each newer release found, at start and daily after.
+/// Sends each newer release found, at start and every few hours after. A
+/// pre-release build is sent nothing; the menu says so.
 pub fn watch() -> mpsc::Receiver<Release> {
     let (found, releases) = mpsc::channel();
+    if !update::follows_releases(VERSION) {
+        return releases;
+    }
     thread::spawn(move || {
         loop {
             let wait = match check() {
@@ -192,6 +196,10 @@ pub fn watch() -> mpsc::Receiver<Release> {
 
 /// `squiggle update`.
 pub fn run() -> Result<()> {
+    if !update::follows_releases(VERSION) {
+        println!("Squiggle {VERSION} is a pre-release: updates are not offered.");
+        return Ok(());
+    }
     match check()? {
         None => println!("Squiggle {VERSION} is the latest."),
         Some(release) => {
