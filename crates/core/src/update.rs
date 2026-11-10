@@ -81,7 +81,7 @@ pub fn offered(feed: &str, running: &str, platform: &str) -> Result<Option<Relea
     // The signature is what makes a bundle trusted; this only keeps a
     // tampered feed from sending the download somewhere else.
     ensure!(
-        bundle.url.starts_with(RELEASES),
+        bundle.url.starts_with(RELEASES) && !bundle.url.contains(".."),
         "the update is not one of Squiggle's releases: {}",
         bundle.url
     );
@@ -168,6 +168,11 @@ mod tests {
     fn a_bundle_from_elsewhere_is_refused() {
         let elsewhere = feed("0.6.0", "https://example.com/squiggle.tar.gz");
         assert!(offered(&elsewhere, "0.5.0", "linux-x86_64").is_err());
+        let climbing = feed(
+            "0.6.0",
+            "https://github.com/Genoux/squiggle/releases/../../other/repo/squiggle.tar.gz",
+        );
+        assert!(offered(&climbing, "0.5.0", "linux-x86_64").is_err());
         assert!(offered("<html>", "0.5.0", "linux-x86_64").is_err());
     }
 
