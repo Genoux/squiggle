@@ -25,6 +25,10 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Checked at start and then daily: a tray app can run for weeks between
 /// logins.
 const EVERY: Duration = Duration::from_secs(24 * 60 * 60);
+/// After a check that failed: at login the network is often not up yet.
+const RETRY: Duration = Duration::from_secs(15 * 60);
+/// An installer that works has stopped Squiggle long before this.
+const INSTALLER_GONE: Duration = Duration::from_secs(120);
 
 fn fetch(url: &str) -> Result<Vec<u8>> {
     let output = Command::new("curl")
@@ -137,12 +141,18 @@ pub fn install_from_menu(release: Release) {
     if INSTALLING.swap(true, Ordering::SeqCst) {
         return;
     }
-    thread::spawn(move || match install(&release) {
-        Ok(()) => note!("installing {}", release.version),
-        Err(err) => {
-            INSTALLING.store(false, Ordering::SeqCst);
-            note!("update not installed: {err:#}");
+    thread::spawn(move || {
+        match install(&release) {
+            Ok(()) => {
+                note!("installing {}", release.version);
+                // Still here after this long, the installer failed before
+                // stopping Squiggle; the menu's Update must work again.
+                thread::sleep(INSTALLER_GONE);
+                note!("the installer did not replace Squiggle; see its output");
+            }
+            Err(err) => note!("update not installed: {err:#}"),
         }
+        INSTALLING.store(false, Ordering::SeqCst);
     });
 }
 
@@ -151,16 +161,20 @@ pub fn watch() -> mpsc::Receiver<Release> {
     let (found, releases) = mpsc::channel();
     thread::spawn(move || {
         loop {
-            match check() {
+            let wait = match check() {
                 Ok(Some(release)) => {
                     if found.send(release).is_err() {
                         return;
                     }
+                    EVERY
                 }
-                Ok(None) => {}
-                Err(err) => note!("update check: {err:#}"),
-            }
-            thread::sleep(EVERY);
+                Ok(None) => EVERY,
+                Err(err) => {
+                    note!("update check: {err:#}");
+                    RETRY
+                }
+            };
+            thread::sleep(wait);
         }
     });
     releases

@@ -807,17 +807,25 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
 - The private key is in the repository's Actions secrets
   (`UPDATER_SIGNING_KEY`, `UPDATER_SIGNING_KEY_PASSWORD`) and the owner's
   password manager, nowhere else. Losing it strands every installed copy:
-  they refuse anything it did not sign. `scripts/build` refuses to make a
-  bundle without it.
+  they refuse anything it did not sign. The key is given to one step
+  only, `scripts/build --sign`, which compiles nothing: during a build
+  every dependency's build script and proc-macro runs, and any of them
+  could read a key that was in the environment. The build refuses to run
+  with the key set, and the signing refuses to run without it.
 - Signing is a Rust example (`crates/core/examples/sign.rs`, the `minisign`
   crate as a dev-dependency), so the macOS and Arch runners sign the same
   way with nothing to install and no password prompt to script. The app
   verifies with `minisign-verify`, which has no dependencies. Downloads go
   through curl, as the model calls do.
-- Checked at start and daily after: a tray app can run for weeks. Before
-  the first release with a feed the check logs a 404 once a day.
-- `scripts/build` makes this platform's bundle and signature in `dist/`;
-  `scripts/build --feed` writes `latest.json` from the signatures there.
+- Checked at start and daily after: a tray app can run for weeks. A check
+  that fails is tried again in 15 minutes, since at login the network is
+  often not up yet; before the first release with a feed that is a 404 in
+  the log each time. One install runs at a time: a second click emptied
+  the folder the first installer was running from. If Squiggle is still
+  there two minutes after an installer started, it failed before stopping
+  Squiggle, and Update works again.
+- `scripts/build` makes this platform's bundle in `dist/`, `--sign` its
+  signature, and `--feed` writes `latest.json` from the signatures there.
   The release workflow builds on macOS and in Arch, then one job writes the
   feed and drafts the release. Publishing the draft is what ships: installed
   copies read `releases/latest`, which skips drafts and pre-releases.
