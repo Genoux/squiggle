@@ -22,13 +22,11 @@ Linux is supported on Hyprland only; see [Linux](#linux).
 ## Install
 
 ```bash
-git clone https://github.com/Genoux/squiggle
-cd squiggle && ./packaging/install.sh
+curl -fsSL https://github.com/Genoux/squiggle/releases/latest/download/install.sh | bash
 ```
 
-Or download a release tarball, unpack it, and run the same
-`packaging/install.sh` from inside - it uses the binary it finds there instead
-of building one.
+That downloads the latest release and installs it; nothing is built. To build
+from source instead, clone the repository and run `./packaging/install.sh`.
 
 That puts **Squiggle.app** in `~/Applications`, starts it, and starts it again at
 every login. Nothing is written outside your home directory and nothing needs
@@ -54,11 +52,10 @@ another compositor Squiggle refuses to install rather than underline nothing.
 | | |
 |---|---|
 | Session | Hyprland, with a tray that speaks StatusNotifierItem (Waybar, Quickshell, ...) |
-| Build | Rust, GTK 4 and `gtk4-layer-shell` (`pacman -S gtk4 gtk4-layer-shell`) |
+| Libraries | GTK 4 and `gtk4-layer-shell` (`pacman -S gtk4 gtk4-layer-shell`); Rust as well to build from source |
 
 ```bash
-git clone https://github.com/Genoux/squiggle
-cd squiggle && ./packaging/install.sh
+curl -fsSL https://github.com/Genoux/squiggle/releases/latest/download/install.sh | bash
 ```
 
 That installs `~/.local/bin/squiggle` and a systemd user unit that starts with

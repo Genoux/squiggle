@@ -2,7 +2,8 @@
 # What a release ships (R9), in dist/.
 #   scripts/build          this platform's bundle, and the signer, compiled
 #   scripts/build --sign   its signature
-#   scripts/build --feed   latest.json, from the signed bundles in dist/
+#   scripts/build --feed   latest.json, from the signed bundles in dist/, and
+#                          install.sh, the one-line installer
 # The bundle is laid out so packaging/install.sh, unpacked as-is, finds
 # bin/squiggle and skips the build; the app updates by running it.
 set -euo pipefail
@@ -30,6 +31,7 @@ feed = {
 json.dump(feed, open("dist/latest.json", "w"), indent=2)
 print("dist/latest.json:", ", ".join(platforms))
 PY
+  cp packaging/get.sh dist/install.sh
   exit 0
 fi
 

@@ -841,6 +841,16 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
   installer failed without replacing Squiggle, and Update works again. A
   two-minute timer was tried first and could reopen the race under a slow
   installer.
+- Installing is one line, `curl … /releases/latest/download/install.sh |
+  bash` (`packaging/get.sh`, published with each release under that name):
+  it reads the feed, downloads this platform's bundle and runs its
+  installer. Before it, a new user had to find the release, unpack a
+  tarball and know to run a script inside it. It checks no signature: a
+  Mac has no minisign, so the first install trusts HTTPS to GitHub, as a
+  download from the release page does, and the app checks every update
+  after. A file fetched by curl carries no quarantine flag, where one saved
+  from a browser does. A drag-to-Applications app would need an Apple
+  Developer ID and notarisation; not bought.
 - `scripts/build` makes this platform's bundle in `dist/`, `--sign` its
   signature, and `--feed` writes `latest.json` from the signatures there.
   The release workflow builds on macOS and in Arch, then one job writes the
