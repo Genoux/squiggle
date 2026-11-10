@@ -806,8 +806,11 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
   worked; the command line is the path that broke.
   0.6.1 carries the fix: `squiggle update` took this workstation from
   0.6.0 to 0.6.1 the same day, the service back on the new build in
-  seconds. The menu's Update and the macOS path are still to be seen
-  working.
+  seconds. The menu's "Update and restart" took the Mac from 0.6.1 to
+  0.7.0 at 16:33 that day, a minute and a half after 0.7.0 was published
+  and Squiggle restarted: the first run of the menu path and of the
+  macOS path. It came back signed and with its Accessibility grant, no
+  prompt. The menu path on Linux is still to be seen working.
 - Trust is the signature, nothing else (`squiggle_core::update`). The feed
   is Tauri's `latest.json`; a signature is minisign's, the `.sig` file's
   text as it is. The bundle is verified in memory against the key in
