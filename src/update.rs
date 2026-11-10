@@ -13,7 +13,10 @@ use std::{
     os::unix::fs::DirBuilderExt,
     path::{Path, PathBuf},
     process::{Command, Stdio},
-    sync::mpsc,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    },
     thread,
     time::Duration,
 };
@@ -26,7 +29,8 @@ const EVERY: Duration = Duration::from_secs(24 * 60 * 60);
 fn fetch(url: &str) -> Result<Vec<u8>> {
     let output = Command::new("curl")
         .args(["--silent", "--show-error", "--fail", "--location"])
-        .args(["--proto", "=https", "--max-time", "300", url])
+        .args(["--proto", "=https", "--proto-redir", "=https"])
+        .args(["--max-time", "300", url])
         .output()
         .context("curl is not installed")?;
     ensure!(
@@ -124,11 +128,21 @@ pub fn install(release: &Release) -> Result<()> {
     run_installer(&root.join("packaging/install.sh"))
 }
 
+/// One install at a time: a second click would empty the folder the first
+/// one's installer is running from, after it has stopped Squiggle.
+static INSTALLING: AtomicBool = AtomicBool::new(false);
+
 /// Installs in the background, from a menu click.
 pub fn install_from_menu(release: Release) {
+    if INSTALLING.swap(true, Ordering::SeqCst) {
+        return;
+    }
     thread::spawn(move || match install(&release) {
         Ok(()) => note!("installing {}", release.version),
-        Err(err) => note!("update not installed: {err:#}"),
+        Err(err) => {
+            INSTALLING.store(false, Ordering::SeqCst);
+            note!("update not installed: {err:#}");
+        }
     });
 }
 
