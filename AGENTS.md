@@ -765,8 +765,12 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
   straight runs were chosen among 0, 2, 4 and 6 units: 2 is the length at
   which the stroke matches the font's stem, and longer ones read as a coil
   or as letters. Beside the word it can still read as "nu". In the app
-  icon the mark is 558 of the tile's 824 wide. At 22 px a unit is one
-  pixel, so the tray's edges land on the pixel grid. It replaced Fold
+  icon the mark is 558 of the tile's 824 wide. In the Linux
+  tray the mark spans the full width of an 18-unit canvas, 22% ink, so it
+  weighs the same as the owner's other tray icons (R10): on a 22-unit
+  canvas with one pixel per unit it sat at 15% ink and looked small beside
+  them, measured 2026-11-12. Its edges no longer land on the pixel grid at
+  22 px; the bar scales the pixels to its own height anyway. It replaced Fold
   (three panels of a folded strip of paper, 0.5.0), which read as
   cardboard and sat oddly in a tray; four rounds of an S in a tile were
   rejected after it as generic. Waves had been ruled out as LanguageTool's
