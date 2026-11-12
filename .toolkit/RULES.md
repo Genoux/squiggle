@@ -197,14 +197,57 @@ Optional, when the project has them: `DESIGN.md` (UI system),
    (`version`, `notes`, `pub_date`, `platforms.<os-arch>.{url,signature}`),
    whatever the stack. URLs point at
    `https://github.com/<owner>/<repo>/releases/download/vX.Y.Z/<file>`.
+   A Tauri app keeps Tauri's base64-wrapped signature; any other app may put
+   the minisign `.sig` text as it is, since it reads its own feed.
 3. The app checks
    `https://github.com/<owner>/<repo>/releases/latest/download/latest.json`
    at startup. A desktop app shows "Update available" with an Update button;
    a CLI prints one line and offers `<app> update`. It verifies the signature
    against the public key built into it before replacing itself, and never
-   installs an unsigned or unverified update.
+   installs an unsigned or unverified update. The new files are written
+   beside the old ones and renamed into place before anything is stopped:
+   copying over a running binary fails ("Text file busy" on Linux) and
+   leaves the app stopped.
 4. The signing key lives only in the repo's Actions secrets
    `UPDATER_SIGNING_KEY` and `UPDATER_SIGNING_KEY_PASSWORD`; `release.yml`
    hands them to `scripts/build`. Losing the key strands every installed
    copy, so the owner keeps a copy in their password manager.
 5. Pre-releases never reach installed apps: `releases/latest` skips them.
+
+## R10. App icons
+
+1. An app has two icons and they are different drawings: the app icon
+   (launcher, dock, installer) and the tray icon. The tray never shows the
+   app icon.
+2. The app icon on Linux is a rounded tile on a transparent 1024x1024 canvas:
+   896x896 at x=64 y=64 (87.5% of the canvas), corner radius 22.5% of the tile
+   (201). Measured 2026-11-12 on the owner's machine as the tile's alpha
+   bounding box: the icon theme draws Slack, Chrome and Zen at this size, so
+   an app on another grid sits larger or smaller than everything beside it.
+3. The app icon on macOS (`.icns`) uses Apple's grid: 824x824 at x=100 y=100
+   (80.5%), radius 185. It is the same drawing; only the tile's share of the
+   canvas changes. Linux sizes are rendered from the same source, larger by
+   896/824.
+4. The tile has a top-to-bottom gradient, lighter at the top, and a soft
+   shadow underneath that stays inside the canvas. The glyph is centred and
+   spans about 60 to 65% of the tile. A flat tile that fills the canvas is
+   wrong: Offhand and Monotub shipped one and looked oversized beside the
+   others.
+5. The tray icon is the glyph alone: one colour, no tile, no gradient, no
+   shadow. White on Linux, for a dark bar; a template image on macOS, so the
+   menu bar tints it.
+6. The tray glyph is the brand mark as drawn: it is scaled and centred on a
+   square canvas, never redrawn or thickened. Every tray glyph carries the
+   same ink: its opaque area is 22% of the canvas. A bold mark is scaled
+   down and a thin one up until they weigh the same; a mark that reaches
+   the canvas edge first stops there. Measured 2026-11-12: with ink at 29%
+   (Monotub, Noted), 25% (Offhand) and 15% (Squiggle) the n looked oversized
+   and the squiggle small in the same tray. 22% is what Squiggle reaches at
+   the full width of its canvas, so the others come down to it. A dense,
+   compact mark may go up to 25%: at 22% Noted's n looked small beside the
+   others, and reads right at 24.5%.
+7. Each icon has one vector source in the repo. Every exported size is
+   rendered from it by a script and never edited by hand; `AGENTS.md` names
+   the sources and the command.
+8. Favicons, `apple-touch-icon` and maskable web icons are outside this
+   grid: square and full bleed, because the platform masks them.
