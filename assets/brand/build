@@ -27,6 +27,15 @@ else
 fi
 magick "$out"/png/app-icon-{16,32,48,64,128,256}.png "$out/squiggle.ico" < /dev/null
 
+# Linux icon themes draw their tiles larger than Apple's grid (R10.2): the
+# same drawing, scaled about the centre by 896/824, so the tile lands at
+# 896 x 896 from 64.
+linux="$(mktemp --suffix=.svg)"
+sed 's|</defs>|</defs><g transform="translate(512 512) scale(1.087379) translate(-512 -512)">|; s|</svg>|</g></svg>|' \
+  app-icon.svg > "$linux"
+rsvg-convert -w 256 -h 256 "$linux" -o "$out/png/app-icon-linux-256.png"
+rm "$linux"
+
 # macOS menu bar: a template image, black on clear, 18 x 16 points drawn at
 # 2x. AppKit colours it for a light or dark bar.
 rsvg-convert -w 36 -h 32 menubar.svg -o "$out/menubar@2x.png"

@@ -72,10 +72,11 @@ fi
 
 cargo build --release
 cargo build --release -p squiggle-core --example sign
-rm -rf "dist/$name" && mkdir -p "dist/$name/bin" "dist/$name/assets/brand/generated"
+rm -rf "dist/$name" && mkdir -p "dist/$name/bin" "dist/$name/assets/brand/generated/png"
 cp "$(target)/release/squiggle" "dist/$name/bin/"
 cp -r packaging "dist/$name/"
 cp assets/brand/generated/Squiggle.icns "dist/$name/assets/brand/generated/"
+cp assets/brand/generated/png/app-icon-linux-256.png "dist/$name/assets/brand/generated/png/"
 cp README.md TROUBLESHOOTING.md LICENSE "dist/$name/"
 tar -czf "dist/$name.tar.gz" -C dist "$name"
 rm -rf "dist/$name"
