@@ -494,6 +494,11 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
   the installer checks `show-environment` and imports them if missing.
   stderr is appended to `$XDG_STATE_HOME/squiggle/squiggle.log` (`%S`), the
   path "Copy recent log" reads.
+- The unit restarts only on failure, so Quit stays quit. The installer adds
+  `squiggle.desktop` so a launcher can start it again; it runs
+  `systemctl --user start squiggle.service`, not the binary, so the log and
+  the updater's stop still reach it. Before it, Quit on Linux left no way
+  back but a terminal or a new session.
 - "Personal dictionary…" opens the dictionary window (`dictionary.rs`):
   a field with Add (Enter too) and the list with a remove button on each
   word, in the stylesheet `card::css` appends to, so light or dark and
@@ -765,7 +770,10 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
   straight runs were chosen among 0, 2, 4 and 6 units: 2 is the length at
   which the stroke matches the font's stem, and longer ones read as a coil
   or as letters. Beside the word it can still read as "nu". In the app
-  icon the mark is 558 of the tile's 824 wide. In the Linux
+  icon the mark is 558 of the tile's 824 wide, on a tile shaded from
+  #4A4540 at the top to the ink below (R10.4): the flat ink tile read as
+  flat beside the other launcher icons. Linux gets the same drawing scaled
+  to its grid (`app-icon-linux-256.png`, tile 896 at 64, R10.2). In the Linux
   tray the mark spans the full width of an 18-unit canvas, 22% ink, so it
   weighs the same as the owner's other tray icons (R10): on a 22-unit
   canvas with one pixel per unit it sat at 15% ink and looked small beside

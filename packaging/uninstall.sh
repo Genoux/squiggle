@@ -3,7 +3,9 @@
 set -euo pipefail
 if [ "$(uname -s)" = Linux ]; then
   systemctl --user disable --now squiggle.service 2>/dev/null || true
-  rm -f "${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/squiggle.service" "$HOME/.local/bin/squiggle"
+  rm -f "${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/squiggle.service" "$HOME/.local/bin/squiggle" \
+    "${XDG_DATA_HOME:-$HOME/.local/share}/applications/squiggle.desktop" \
+    "${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor/256x256/apps/squiggle.png"
   systemctl --user daemon-reload
   echo "Squiggle removed. Your settings and dictionary are still in ~/.config/squiggle and the"
   echo "log in ~/.local/state/squiggle; delete those folders too if you want them gone."

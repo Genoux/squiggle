@@ -145,11 +145,30 @@ UNIT
   check_session_environment
   systemctl --user daemon-reload
   systemctl --user enable --now squiggle.service
+  # A launcher entry, so Squiggle can be started again after Quit. Written
+  # once the service is back, so a missing icon cannot leave it stopped.
+  # It starts the unit rather than the binary: a copy run outside it would
+  # log elsewhere and be left running by the next update's stop.
+  local data="${XDG_DATA_HOME:-$HOME/.local/share}"
+  mkdir -p "$data/applications" "$data/icons/hicolor/256x256/apps"
+  cp "$repo/assets/brand/generated/png/app-icon-linux-256.png" "$data/icons/hicolor/256x256/apps/squiggle.png"
+  cat > "$data/applications/squiggle.desktop" <<ENTRY
+[Desktop Entry]
+Type=Application
+Name=Squiggle
+Comment=Grammar checker
+Exec=systemctl --user start squiggle.service
+Icon=squiggle
+Terminal=false
+StartupNotify=false
+Categories=Utility;
+ENTRY
   offer_flags
 
   say "Done"
   cat <<MSG
-Squiggle is in your tray and starts with your session.
+Squiggle is in your tray and starts with your session. After Quit, start it
+again from your app launcher.
 
 Check what it can see in a field with: $bin/squiggle doctor
 For AI suggestions, open the tray icon > OpenRouter key...
