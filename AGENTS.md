@@ -494,6 +494,15 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
   the installer checks `show-environment` and imports them if missing.
   stderr is appended to `$XDG_STATE_HOME/squiggle/squiggle.log` (`%S`), the
   path "Copy recent log" reads.
+- Accessibility is on only while an app holds an event listener: AT-SPI
+  2.62's bus launcher sets `IsEnabled` false when the last one vanishes,
+  and ignores `toolkit-accessibility`. Squiggle was the only listener, so
+  Quit turned it off, and Slack opened in that gap stayed off the bus after
+  Squiggle came back ("not on the accessibility bus" in `squiggle doctor`).
+  `squiggle accessibility`, run as `squiggle-accessibility.service`, holds
+  one listener and nothing else, so Squiggle can quit and come back to every
+  app already open. Measured 2026-11-16: with it running, stopping Squiggle
+  left `IsEnabled` true; without it, false.
 - The unit restarts only on failure, so Quit stays quit. The installer adds
   `squiggle.desktop` so a launcher can start it again; it runs
   `systemctl --user start squiggle.service`, not the binary, so the log and

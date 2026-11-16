@@ -156,6 +156,21 @@ pub fn enable() -> zbus::Result<bool> {
     Ok(was_on)
 }
 
+/// Keeps accessibility on for as long as it runs. AT-SPI 2.62's bus
+/// launcher sets `IsEnabled` back to false once no app holds an event
+/// listener, and Squiggle was the only one: quit, and every Chromium or
+/// Electron app opened before it came back built no tree until restarted.
+/// Returns only when the accessibility bus goes away, for systemd to restart.
+pub fn hold() -> zbus::Result<()> {
+    enable()?;
+    let conn = connect()?;
+    RegistryProxyBlocking::new(&conn)?.register_event(FOCUS_EVENT)?;
+    for message in MessageIterator::from(&conn) {
+        message?;
+    }
+    Err(zbus::Error::Failure("the accessibility bus closed".into()))
+}
+
 pub fn connect() -> zbus::Result<Connection> {
     let session = Builder::session()?.method_timeout(SETUP_TIMEOUT).build()?;
     let address = BusProxyBlocking::new(&session)?.get_address()?;

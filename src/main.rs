@@ -39,6 +39,8 @@ fn main() -> Result<()> {
         Some("doctor") => macos::doctor(),
         #[cfg(target_os = "linux")]
         Some("doctor") => linux::doctor(),
+        #[cfg(target_os = "linux")]
+        Some("accessibility") => linux::hold_accessibility(),
         #[cfg(target_os = "macos")]
         Some("lab") => macos::lab(&args[1..]),
         #[cfg(target_os = "macos")]
@@ -58,6 +60,7 @@ fn main() -> Result<()> {
                  squiggle check --local   the on-device pass only, nothing sent\n\
                  squiggle check --improve   the clearer wording the app proposes\n\
                  squiggle doctor     what Squiggle can see in the focused field\n\
+                 squiggle accessibility   keep accessibility on, even while Squiggle is quit (Linux)\n\
                  squiggle lab        audit accepting fixes in real text fields, off screen (macOS)\n\
                  squiggle preview [dir]   draw every card and the dictionary to PNG (macOS)\n\
                  squiggle update     install the latest release, if it is newer\n\

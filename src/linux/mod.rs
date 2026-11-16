@@ -155,6 +155,10 @@ fn with_engine(shared: &Weak<RefCell<Option<LinuxEngine>>>, change: impl FnOnce(
 
 /// What Squiggle can see right now, for TROUBLESHOOTING.md. Waits a moment so
 /// there is time to click into the field in question.
+pub fn hold_accessibility() -> anyhow::Result<()> {
+    Ok(atspi::hold()?)
+}
+
 pub fn doctor() -> anyhow::Result<()> {
     let config = squiggle_core::Config::load()?;
     println!("squiggle {}", env!("CARGO_PKG_VERSION"));
