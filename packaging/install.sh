@@ -142,8 +142,28 @@ StandardError=append:%S/squiggle/squiggle.log
 [Install]
 WantedBy=graphical-session.target
 UNIT
+  # Accessibility stays on only while some app listens for its events, and
+  # Squiggle was the only one: quit, and apps opened before it came back
+  # never joined. This holds it on whether Squiggle runs or not.
+  cat > "$units/squiggle-accessibility.service" <<UNIT
+[Unit]
+Description=Keep accessibility on for Squiggle
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+ExecStart=%h/.local/bin/squiggle accessibility
+Restart=on-failure
+RestartSec=3
+StandardError=append:%S/squiggle/squiggle.log
+
+[Install]
+WantedBy=graphical-session.target
+UNIT
   check_session_environment
   systemctl --user daemon-reload
+  systemctl --user enable squiggle-accessibility.service
+  systemctl --user restart squiggle-accessibility.service
   systemctl --user enable --now squiggle.service
   # A launcher entry, so Squiggle can be started again after Quit. Written
   # once the service is back, so a missing icon cannot leave it stopped.
