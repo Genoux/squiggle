@@ -400,7 +400,11 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
   once the compositor has it). A save that times out, errors or loses one
   type refuses the fix - a clipboard restored without a type is not the
   user's - and nothing is selected; an empty clipboard is fine, restore
-  clears. The restore waits 250ms on a thread and puts the clipboard back
+  clears. `SAVE_TARGETS` and `COMPOUND_TEXT`, which XWayland lists beside
+  an X app's text, are not read or restored: the first is a request to a
+  clipboard manager and never answered, the second the same text in a legacy
+  encoding that took 14-79s, and either refused every fix in Slack
+  (2026-11-18, "the owner did not answer in time"). The restore waits 250ms on a thread and puts the clipboard back
   only if it is still Squiggle's offer (only the types it offered, holding its
   text); one the user copied to meanwhile stays. One paste at a time.
   A fix that only removes text is not pasted: Zen ignores a paste of empty
