@@ -37,6 +37,13 @@ const OFFERED: &[&str] = &[
     "x-kde-passwordManagerHint",
 ];
 
+/// X11 targets XWayland lists beside an X app's clipboard that hold nothing
+/// to restore: `SAVE_TARGETS` asks a clipboard manager to take the selection
+/// (ICCCM) and never answered a read; `COMPOUND_TEXT` is the text again in a
+/// legacy encoding, converted on demand, and took 14s to 79s to answer. Either
+/// one held the save past `PIPE_TIMEOUT` and every fix in Slack was refused.
+const NOT_DATA: &[&str] = &["SAVE_TARGETS", "COMPOUND_TEXT"];
+
 /// What the clipboard held: each type it offered, with its bytes.
 type Saved = Vec<(String, Vec<u8>)>;
 
@@ -180,6 +187,7 @@ fn saved_all(
 ) -> Result<Saved, String> {
     types
         .into_iter()
+        .filter(|kind| !NOT_DATA.contains(&kind.as_str()))
         .map(|kind| {
             let bytes = read(&kind).map_err(|why| format!("{kind}: {why}"))?;
             Ok((kind, bytes))
@@ -297,6 +305,19 @@ mod tests {
             _ => Ok(Vec::new()),
         });
         assert_eq!(partial, Err("image/png: pipe closed".to_string()));
+    }
+
+    #[test]
+    fn x11_targets_that_hold_no_data_of_their_own_are_not_read() {
+        let types = kinds(&["text/plain", "COMPOUND_TEXT", "SAVE_TARGETS"]);
+        let saved = saved_all(types, |kind| match kind {
+            "text/plain" => Ok(b"hello".to_vec()),
+            _ => unreachable!("{kind} was read"),
+        });
+        assert_eq!(
+            saved,
+            Ok(vec![("text/plain".to_string(), b"hello".to_vec())])
+        );
     }
 
     #[test]
