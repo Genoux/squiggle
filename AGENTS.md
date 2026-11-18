@@ -850,7 +850,8 @@ macOS ships first; Linux (Wayland, Hyprland) follows on the same engine.
   0.7.0 at 16:33 that day, a minute and a half after 0.7.0 was published
   and Squiggle restarted: the first run of the menu path and of the
   macOS path. It came back signed and with its Accessibility grant, no
-  prompt. The menu path on Linux is still to be seen working.
+  prompt. On Linux the menu took this workstation from 0.8.0 to 0.9.0 on
+  2026-11-18, the service back on the new build ("0.9.0 ready" at 11:07).
 - Trust is the signature, nothing else (`squiggle_core::update`). The feed
   is Tauri's `latest.json`; a signature is minisign's, the `.sig` file's
   text as it is. The bundle is verified in memory against the key in
