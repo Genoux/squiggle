@@ -1,8 +1,8 @@
 # Rules
 
-The standard every project follows, whatever its stack. Agents read this file
-through the global `~/.claude/CLAUDE.md` import (`jb install`), so a project
-never has to restate it. A project's own `AGENTS.md` may add rules; a deliberate
+The standard every project follows, whatever its stack. `jb sync` copies this
+file into each project as `.toolkit/RULES.md`, and the project's `AGENTS.md`
+points to it, so a project never has to restate it. A project's own `AGENTS.md` may add rules; a deliberate
 exception is one line `R<id>: reason` in the project's `.jb-exceptions`
 (`R3` covers `R3.2`), which `jb check` reports instead of failing. An
 exception without a reason is itself a problem.
@@ -22,9 +22,10 @@ the owner to run `jb` or any procedure below: run it yourself and report.
 
 1. **New project.** When the owner pitches or names something new to build,
    follow the `jb-new-project` skill (it runs `jb new`).
-2. **Every session in a project.** The SessionStart hook runs `jb session`
-   and puts any departure from these rules in your context. Fix them as part
-   of the session, on a branch: `jb sync` re-applies managed files; the rest
+2. **Every session in a project.** The project's SessionStart hook runs its
+   own copy of jb (`.toolkit/bin/jb session`) and puts any departure from
+   these rules in your context. Fix them as part of the session, on a
+   branch: `jb sync` re-applies managed files; the rest
    (`scripts/check`, docs, workflows) you edit by hand. Run `jb check` again
    to confirm, and tell the owner in one line what changed.
 3. **Project not on the standard yet.** Offer once to adopt it. On yes,
@@ -48,9 +49,6 @@ the owner to run `jb` or any procedure below: run it yourself and report.
    hard to reverse), ask. Otherwise pick the sensible default, say which, and go.
 4. Report what was actually run and what it showed. A check that was skipped
    is reported as skipped.
-5. The `branch-pr` and `issue-creation` skills (Gentle AI's own contribution
-   rules: an approved issue, type labels) do not apply in the owner's
-   projects; R3 governs branches, commits and pull requests.
 
 ## R2. Demos, previews, prototypes: local only
 
