@@ -1161,7 +1161,12 @@ cmd_check() {
   fi
 
   if git rev-parse -q --verify HEAD >/dev/null; then
-    local n; n=$(git log -n "${JB_HISTORY_LIMIT:-300}" --format=%B | grep -ciE '^co-authored-by:|generated with' || true)
+    # History from before the project adopted the standard (the commit that
+    # added .toolkit/toolkit-version) is not judged: rewriting it is not an option.
+    local n adopted
+    adopted=$(git log --diff-filter=A --format=%H -- .toolkit/toolkit-version | tail -n 1)
+    n=$( { if [ -n "$adopted" ]; then git log -1 --format=%B "$adopted"; git log -n "${JB_HISTORY_LIMIT:-300}" --format=%B "$adopted..HEAD"
+           else git log -n "${JB_HISTORY_LIMIT:-300}" --format=%B; fi; } | grep -ciE '^co-authored-by:|generated with' || true)
     [ "$n" = 0 ] && ok "no agent attribution in history" || bad "$n attribution lines in history (R3.4)"
     local off
     off=$(git log -50 --no-merges --format=%s | grep -cvE '^(feat|fix|chore|docs|refactor|perf|test|ci|build|style|revert)(\([a-z0-9-]+\))?!?: ' || true)
